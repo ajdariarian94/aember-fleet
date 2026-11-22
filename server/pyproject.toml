@@ -1,0 +1,16 @@
+[project]
+name = "aember-fleet"
+version = "0.1.0"
+description = "Fleet server for aember devices: registry, signed container releases, rollout"
+requires-python = ">=3.11"
+dependencies = ["fastapi", "uvicorn", "cryptography"]
+
+[project.scripts]
+aember-fleet = "aember_fleet.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["aember_fleet"]

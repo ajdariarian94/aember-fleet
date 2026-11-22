@@ -1,0 +1,23 @@
+{
+  "name": "aember-fleet-agent",
+  "command": ["/usr/bin/aember-fleet-agent"],
+  "network": "isolated",
+  "restart_policy": "always",
+  "max_restart_attempts": 0,
+  "restart_delay": 10,
+  "stop_timeout": 5,
+  "console_log": true,
+  "compression": "xz",
+  "lxc": [
+    "# The agent needs no network: aember-auth's socket reaches the fleet server, containerd's control socket the containers",
+    "lxc.hook.pre-start = /bin/sh -c \"mkdir -p /run/aember-auth /run/aember-containerd /var/lib/aember-fleet\"",
+    "lxc.mount.entry = /run/aember-auth run/aember-auth none bind,create=dir 0 0",
+    "lxc.mount.entry = /run/aember-containerd run/aember-containerd none bind,create=dir 0 0",
+    "# The container images it replaces (and their .prev), and containers.json for their paths",
+    "lxc.mount.entry = /var/lib/aember host/var/lib/aember none bind,create=dir 0 0",
+    "lxc.mount.entry = /etc/aember host/etc/aember none bind,ro,create=dir 0 0",
+    "# fleet.json (release public key, arch): /etc/aember/fleet on the device; its state: /var/lib/aember-fleet",
+    "lxc.mount.entry = /etc/aember/fleet etc/aember-fleet none bind,ro,create=dir 0 0",
+    "lxc.mount.entry = /var/lib/aember-fleet var/lib/aember-fleet none bind,create=dir 0 0"
+  ]
+}

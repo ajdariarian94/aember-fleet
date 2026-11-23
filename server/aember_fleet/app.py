@@ -25,6 +25,7 @@ Admin (Authorization: Bearer <data/admin.token>):
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -287,8 +288,6 @@ def create_app(data_path: Path) -> FastAPI:
 
         fd, tmp = tempfile.mkstemp(dir=data.artifacts, suffix=".part")
         got = 0
-        import hashlib
-
         h = hashlib.sha256()
         with os.fdopen(fd, "wb") as f:
             async for chunk in request.stream():

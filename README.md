@@ -84,7 +84,7 @@ and not itself).
 
 ```bash
 git submodule update --init
-aember-cli/run.py test                 # agent unit tests (x64 SDK) + CLI tests
+aember-cli/run.py test                 # agent unit tests (x64 SDK)
 aember-cli/run.py build -a x64-poky-linux && aember-cli/run.py pack -a x64-poky-linux
 docker build -f server/Dockerfile.test -t aember-fleet-test server && docker run --rm aember-fleet-test
 ```

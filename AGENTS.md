@@ -13,7 +13,8 @@ Container updates for aember fleets (README.md). Two parts:
   (`server/Dockerfile.test`); there is no Python venv with these packages
   in the dev container.
 - the repository root: the device agent, C++23, built like aember-stats
-  with the shared `aember-cli/` (`TESTS = "sdk"`, `RESOURCES_VERSION =
+  with the shared CLI (`aember-cli/run.py` → aember-build-helper's
+  `project-cli/`; `TESTS = "sdk"`, `RESOURCES_VERSION =
   "0.1.15"`: wolfSSL and nlohmann/json in the SDK). `updater.h` is the logic
   behind two interfaces (`FleetApi`, `ContainerControl`); `clients.h` has
   the real ones (aember-auth's socket, aember-containerd's control socket);

@@ -110,47 +110,47 @@ int Updater::RunOnce() {
 void Updater::Update(const DesiredContainer& want) {
   auto& e = entries_[want.name];
   e.error.clear();
+  const auto fail = [&e](std::string state, std::string error) {
+    e.state = std::move(state);
+    e.error = std::move(error);
+  };
   if (e.version == want.version) {
     e.state = "current";
     return;
   }
   if (e.failed.contains(want.version)) {
-    e.state = "failed";
-    e.error = std::format("version {} was rolled back before", want.version);
+    fail("failed",
+         std::format("version {} was rolled back before", want.version));
     return;
   }
   if (want.name == "aember-fleet-agent") {
-    e.state = "error";
-    e.error =
-        "the agent doesn't update itself (stopping it would cut the update "
-        "off)";
+    fail("error",
+         "the agent doesn't update itself (stopping it would cut the update "
+         "off)");
     return;
   }
   const auto image = images_.find(want.name);
   if (image == images_.end()) {
-    e.state = "error";
-    e.error = "no such container on this device";
+    fail("error", "no such container on this device");
     return;
   }
   auto m = VerifyManifest(config_.release_key, want.manifest, want.signature);
   if (!m) {
-    e.state = "error";
-    e.error = m.error();
+    fail("error", m.error());
     return;
   }
   if (m->container != want.name || m->version != want.version ||
       m->arch != config_.arch) {
-    e.state = "error";
-    e.error = std::format(
-        "manifest is for {} {} {}", m->container, m->version, m->arch);
+    fail("error",
+         std::format(
+             "manifest is for {} {} {}", m->container, m->version, m->arch));
     return;
   }
   std::cerr << "aember-fleet-agent: " << want.name << ": "
             << (e.version.empty() ? "image" : e.version) << " -> "
             << want.version << '\n';
   if (auto r = Install(want, *m, image->second); !r) {
-    e.state = "error";
-    e.error = r.error();
+    fail("error", r.error());
     return;
   }
   if (Healthy(want.name)) {

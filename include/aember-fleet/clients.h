@@ -47,6 +47,8 @@ class ControlSocket final : public ContainerControl {
 
  private:
   std::expected<nlohmann::json, std::string> Ask(const nlohmann::json& request);
+  std::expected<void, std::string> Do(std::string_view op,
+                                      const std::string& name);
   std::string socket_;
 };
 

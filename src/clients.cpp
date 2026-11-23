@@ -35,6 +35,13 @@ struct Fd {
   }
 };
 
+/// A call's HTTP status as success (200) or an error.
+std::expected<void, std::string> Ok(const std::expected<int, std::string>& r) {
+  if (!r) return std::unexpected(r.error());
+  if (*r != 200) return std::unexpected(std::format("HTTP {}", *r));
+  return {};
+}
+
 }  // namespace
 
 std::expected<int, std::string> AuthSocketFleet::Call(
@@ -104,18 +111,12 @@ std::expected<void, std::string> AuthSocketFleet::Download(
     const std::string& artifact, const Sink& sink) {
   // A non-200 body (an error message) also reaches the sink; the updater
   // checks size and SHA-256 against the manifest anyway.
-  auto r = Call("GET", "/api/v1/device/artifacts/" + artifact, nullptr, sink);
-  if (!r) return std::unexpected(r.error());
-  if (*r != 200) return std::unexpected(std::format("HTTP {}", *r));
-  return {};
+  return Ok(Call("GET", "/api/v1/device/artifacts/" + artifact, nullptr, sink));
 }
 
 std::expected<void, std::string> AuthSocketFleet::Report(
     const nlohmann::json& status) {
-  auto r = Call("POST", "/api/v1/device/status", &status, {});
-  if (!r) return std::unexpected(r.error());
-  if (*r != 200) return std::unexpected(std::format("HTTP {}", *r));
-  return {};
+  return Ok(Call("POST", "/api/v1/device/status", &status, {}));
 }
 
 std::expected<nlohmann::json, std::string> ControlSocket::Ask(
@@ -152,16 +153,19 @@ std::expected<std::string, std::string> ControlSocket::State(
   return std::unexpected("containerd: no container " + name);
 }
 
-std::expected<void, std::string> ControlSocket::Stop(const std::string& name) {
-  auto j = Ask({{"op", "stop"}, {"name", name}});
+std::expected<void, std::string> ControlSocket::Do(std::string_view op,
+                                                   const std::string& name) {
+  auto j = Ask({{"op", op}, {"name", name}});
   if (!j) return std::unexpected(j.error());
   return {};
 }
 
+std::expected<void, std::string> ControlSocket::Stop(const std::string& name) {
+  return Do("stop", name);
+}
+
 std::expected<void, std::string> ControlSocket::Start(const std::string& name) {
-  auto j = Ask({{"op", "start"}, {"name", name}});
-  if (!j) return std::unexpected(j.error());
-  return {};
+  return Do("start", name);
 }
 
 }  // namespace aember::fleet

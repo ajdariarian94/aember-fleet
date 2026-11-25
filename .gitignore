@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 /fleet-data/
 release.key
+.hypothesis/

@@ -52,6 +52,14 @@ container is stopped, a pending update is rolled back at start.
 - A test that pins down a fixed bug starts with a comment
   `Regression: <the bug>` (`grep -rn "Regression:"` lists them). Every bug
   fix gets one.
+- Mutation testing: agent `aember-cli/run.py mutate [-n N] [-f FILE]` (the
+  shared mutator from aember-build-helper; report in `build/mutation/`),
+  server mutmut 3.8.1 (`server/Dockerfile.mutation`, `server/tools/mutation.py`
+  writes a per-module report). Both weekly in CI
+  (`.github/workflows/mutation.yml`, survivors in the run summary). Scores
+  2026-11-25: agent 83.0% (147 mutants; tests added for the sha256 length
+  and base64 padding), server 43% -> 70% (1358 mutants; most of the rest
+  are equivalent: SQL keyword case, message texts).
 - Fuzzing: `fuzz/run.sh [SECONDS] [TARGET...]` (CI: 60 s per target, the
   `fuzz` job). It is a host build with clang 18 and Ubuntu's wolfSSL and
   nlohmann-json (the SDK has no libFuzzer). Targets: `fuzz_clients` (both

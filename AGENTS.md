@@ -32,6 +32,15 @@ Container updates for aember fleets (README.md). Two parts:
 - aember-containerd's control socket (aember `services/containerd/
   include/.../control.h`).
 
+## TLA+ model
+
+`spec/tla/FleetUpdate.tla` is the update's design (power loss at any step,
+assignment changes). When the updater's steps change, change the model,
+run `spec/tla/check.sh` (Docker, seconds) and keep its README's "Where the
+code differs" current. Invariants to keep: the image is never missing (no
+rename of the image away), the update is saved as pending before the
+container is stopped, a pending update is rolled back at start.
+
 ## Rules
 
 - The release private key never goes to the server: the server and the

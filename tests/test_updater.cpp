@@ -55,7 +55,9 @@ struct FakeControl final : ContainerControl {
   std::expected<std::string, std::string> State(const std::string& n) override {
     return state[n];
   }
+  std::function<void()> on_stop;
   std::expected<void, std::string> Stop(const std::string& n) override {
+    if (on_stop) on_stop();
     calls.push_back("stop " + n);
     state[n] = "stopped";
     return {};
@@ -121,7 +123,14 @@ struct World {
   }
 };
 
-void NoSleep(std::chrono::seconds) {}
+bool NoSleep(std::chrono::seconds) {
+  return true;
+}
+
+/// The agent being stopped (SIGTERM) during the health check.
+bool Stopping(std::chrono::seconds) {
+  return false;
+}
 
 }  // namespace
 
@@ -202,6 +211,71 @@ int main() {
       }
     }
     CHECK(found);
+  }
+  {  // the image never goes away, and the update is saved before the stop
+    World w;
+    Updater u{w.config, w.fleet, w.control, NoSleep};
+    w.Assign("2", "v2 image");
+    bool checked = false;
+    w.control.on_stop = [&] {
+      if (checked) return;
+      checked = true;
+      CHECK_EQ(Read(w.image), std::string{"v1 image"});
+      CHECK_EQ(Read(w.image + ".prev"), std::string{"v1 image"});
+      const auto state = nlohmann::json::parse(Read(w.config.state_file));
+      CHECK_EQ(state["containers"]["echo"]["pending"].get<std::string>(),
+               std::string{"2"});
+    };
+    u.RunOnce();
+    CHECK(checked);
+    CHECK_EQ(Read(w.image), std::string{"v2 image"});
+    const auto state = nlohmann::json::parse(Read(w.config.state_file));
+    CHECK(!state["containers"]["echo"].contains("pending"));
+  }
+  {  // Regression (spec/tla/FleetUpdate.tla, GoodKept): an agent stopped in
+     // the health check of a crashing version; the next one used to move the
+     // crashing image to .prev and lose the good one for good.
+    World w;
+    {
+      Updater u{w.config, w.fleet, w.control, Stopping};
+      w.Assign("3", "crash image");
+      u.RunOnce();
+      CHECK_EQ(w.Echo()["state"].get<std::string>(),
+               std::string{"interrupted"});
+    }
+    Updater again{w.config, w.fleet, w.control, NoSleep};
+    again.RunOnce();  // rolled back first, tried again, rolled back
+    CHECK_EQ(Read(w.image), std::string{"v1 image"});
+    CHECK_EQ(w.control.state["echo"], std::string{"running"});
+    CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"rolled-back"});
+    CHECK(w.Echo()["failed_versions"] == nlohmann::json::array({"3"}));
+  }
+  {  // interrupted kMaxInterrupts times: failed, not tried again
+    World w;
+    w.Assign("2", "v2 image");
+    for (int i = 0; i < kMaxInterrupts; ++i) {
+      Updater u{w.config, w.fleet, w.control, Stopping};
+      u.RunOnce();
+    }
+    Updater last{w.config, w.fleet, w.control, NoSleep};
+    last.RunOnce();
+    CHECK_EQ(Read(w.image), std::string{"v1 image"});
+    CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"failed"});
+    CHECK_EQ(w.fleet.downloads, kMaxInterrupts);
+  }
+  {  // Regression (spec/tla/FleetUpdate.tla, ImageAlwaysThere): a power loss
+     // between the two renames of the old agent left only .prev; every later
+     // update then failed and the container never came back.
+    World w;
+    fs::rename(w.image, w.image + ".prev");
+    w.control.state["echo"] = "failed";
+    Updater u{w.config, w.fleet, w.control, NoSleep};
+    u.RunOnce();
+    CHECK_EQ(Read(w.image), std::string{"v1 image"});
+    CHECK_EQ(w.control.state["echo"], std::string{"running"});
+    w.Assign("2", "v2 image");
+    u.RunOnce();
+    CHECK_EQ(Read(w.image), std::string{"v2 image"});
   }
   CHECK(!ParseDesired(nlohmann::json{{"containers", {{{"name", "x"}}}}})
              .has_value());

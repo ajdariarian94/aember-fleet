@@ -40,3 +40,15 @@ jobs:
           docker run --rm aember-fleet-test
       - name: Image
         run: docker build -t aember-fleet server
+
+  tla:
+    name: TLA+ model of the update (TLC)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/aember-tla
+          key: tla2tools-${{ hashFiles('spec/tla/check.sh') }}
+      - name: Model-check
+        run: spec/tla/check.sh

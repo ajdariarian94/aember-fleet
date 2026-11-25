@@ -1,0 +1,1 @@
+{"containers":[{"name":"echo","type":"container","container":{"squashfs":"/var/lib/aember/echo/echo.squashfs"}}]}\x{"containers":{"echo":{"version":"2","failed":["3"]}}}

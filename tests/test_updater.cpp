@@ -273,9 +273,56 @@ int main() {
     u.RunOnce();
     CHECK_EQ(Read(w.image), std::string{"v1 image"});
     CHECK_EQ(w.control.state["echo"], std::string{"running"});
+  }
+  {  // Regression: a broken entry in containers.json or the agent's own
+     // state.json (a power cut, a hand edit) threw out of RunOnce and the
+     // agent crash-looped (found by fuzz_agent_files). Now it is skipped.
+    World w;
+    std::ofstream{w.config.containers_json}
+        << R"({"containers":[{"name":1,"container":{"squashfs":"/x"}},)"
+           R"({"name":"y","container":"z"},"text",)"
+           R"({"name":"echo","container":{"squashfs":"/var/lib/aember/echo/echo.squashfs"}}]})";
+    fs::create_directories(fs::path{w.config.state_file}.parent_path());
+    std::ofstream{w.config.state_file}
+        << R"({"containers":{"echo":{"version":"1","failed":[3,"4"],)"
+           R"("pending":5,"interrupted":["2"]},"x":7}})";
+    Updater u{w.config, w.fleet, w.control, NoSleep};
+    w.Assign("4", "v4 image");
+    u.RunOnce();
+    CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"failed"});
     w.Assign("2", "v2 image");
     u.RunOnce();
     CHECK_EQ(Read(w.image), std::string{"v2 image"});
+  }
+  // Regression: a poll_interval too big for an int was undefined behaviour
+  // (found by fuzz_desired); it is clamped, and a non-number is the default.
+  CHECK_EQ(ParseDesired(nlohmann::json::parse(
+                            R"({"poll_interval":1e300,"containers":[]})"))
+               ->poll_interval,
+           86400);
+  CHECK_EQ(ParseDesired(nlohmann::json::parse(
+                            R"({"poll_interval":"5","containers":[]})"))
+               ->poll_interval,
+           60);
+  {  // fleet.json
+    ReleaseKey key;
+    const auto pub = Base64Encode(key.pub);
+    auto c = ParseAgentConfig(
+        {{"release_public_key", pub}, {"arch", kArch}, {"health_seconds", 5}});
+    CHECK(c.has_value() && c->health_seconds == 5 && c->arch == kArch);
+    CHECK(!ParseAgentConfig(nlohmann::json::array()).has_value());
+    CHECK(!ParseAgentConfig({{"release_public_key", pub}}).has_value());
+    CHECK(!ParseAgentConfig({{"release_public_key", 1}, {"arch", kArch}})
+               .has_value());
+    // Regression: a health_seconds that wasn't a number threw out of main()
+    // (found by fuzz_agent_config); now it is the default, and clamped.
+    c = ParseAgentConfig({{"release_public_key", pub},
+                          {"arch", kArch},
+                          {"health_seconds", "20"}});
+    CHECK(c.has_value() && c->health_seconds == 20);
+    c = ParseAgentConfig(
+        {{"release_public_key", pub}, {"arch", kArch}, {"health_seconds", -4}});
+    CHECK(c.has_value() && c->health_seconds == 1);
   }
   CHECK(!ParseDesired(nlohmann::json{{"containers", {{{"name", "x"}}}}})
              .has_value());

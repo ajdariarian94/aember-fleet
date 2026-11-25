@@ -59,21 +59,13 @@ int main(int argc, char** argv) {
     std::cerr << "aember-fleet-agent: cannot read " << config_path << '\n';
     return 1;
   }
-  AgentConfig config;
-  const auto key = ParsePublicKey(j.value("release_public_key", std::string{}));
-  if (!key) {
-    std::cerr << "aember-fleet-agent: " << config_path << ": " << key.error()
+  auto parsed = ParseAgentConfig(j);
+  if (!parsed) {
+    std::cerr << "aember-fleet-agent: " << config_path << ": " << parsed.error()
               << '\n';
     return 1;
   }
-  config.release_key = *key;
-  config.arch = j.value("arch", std::string{});
-  if (config.arch.empty()) {
-    std::cerr << "aember-fleet-agent: " << config_path
-              << ": 'arch' is missing\n";
-    return 1;
-  }
-  config.health_seconds = j.value("health_seconds", 20);
+  const AgentConfig config = *parsed;
 
   AuthSocketFleet fleet{config.arch};
   ControlSocket control;

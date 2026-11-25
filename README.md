@@ -94,6 +94,13 @@ docker build -f server/Dockerfile.test -t aember-fleet-test server && docker run
 `spec/tla/check.sh` model-checks the update with TLC (power loss at any
 step, the assignment changing at any time; `spec/tla/README.md`).
 
+The agent's inputs (both sockets, the desired state, manifests, fleet.json,
+containers.json, its state file) have libFuzzer targets in `fuzz/`. On
+Ubuntu 24.04, with `clang-18 llvm-18 libclang-rt-18-dev cmake ninja-build
+pkg-config libwolfssl-dev nlohmann-json3-dev` installed: `fuzz/run.sh` (every
+target for 60 s, as CI does); crashing inputs land in
+`build/fuzz/crashes/<target>/`.
+
 Tested end to end in aember's QEMU x64: enrollment and login over TLS, an
 update of aember-echo to a signed v2, and the rollback of a v3 that exits at
 once.

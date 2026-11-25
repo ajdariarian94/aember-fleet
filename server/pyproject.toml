@@ -14,3 +14,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
 packages = ["aember_fleet"]
+
+# Mutation testing (mutmut, in Dockerfile.mutation): `docker build -f
+# Dockerfile.mutation -t aember-fleet-mutation . && docker run --rm aember-fleet-mutation`
+[tool.mutmut]
+source_paths = ["aember_fleet/"]
+also_copy = ["tools/"]  # tests/test_mutation_report.py loads tools/mutation.py
+pytest_add_cli_args_test_selection = ["tests/"]

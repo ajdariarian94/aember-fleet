@@ -230,3 +230,46 @@ def test_nan_from_a_device_is_refused(fleet, tmp_path):
                     headers={**send, **device.login()})
     assert r.status_code == 422
     assert client.get("/api/v1/admin/devices", headers=admin).status_code == 200
+
+
+def test_secrets_are_private_files(fleet, tmp_path):
+    _, _, key, data = fleet
+    for p in (data / "token.secret", data / "admin.token", key,
+              data / "tls" / "ca.key", data / "tls" / "server.key"):
+        assert p.stat().st_mode & 0o777 == 0o600, p
+    assert (data / "artifacts").is_dir()
+    assert (data / "fleet.db").is_file()
+    # A second init refuses to overwrite.
+    with pytest.raises(SystemExit):
+        cli.init(data, "fleet.test", [], tmp_path / "other.key")
+
+
+def test_a_container_without_a_build_doesnt_hide_the_others(fleet, tmp_path):
+    client, admin, key, _ = fleet
+    d = Device(client)
+    d.enroll(join_token(client, admin, group="lab"))
+    h = d.login()
+    upload(client, admin, key, tmp_path, "aaa", "1", b"a", arch="aarch64-poky-linux")
+    upload(client, admin, key, tmp_path, "zzz", "1", b"z")
+    for name in ("aaa", "zzz"):
+        client.post("/api/v1/admin/assign", headers=admin,
+                    json={"container": name, "version": "1", "group": "lab"})
+    got = client.get("/api/v1/device/desired", headers=h).json()["containers"]
+    assert [c["name"] for c in got] == ["zzz"]
+
+
+def test_device_list_shows_what_the_admin_needs(fleet, tmp_path):
+    client, admin, key, _ = fleet
+    d = Device(client)
+    d.enroll(join_token(client, admin, group="lab"), name="kitchen")
+    upload(client, admin, key, tmp_path, "echo", "1", b"one")
+    client.post("/api/v1/admin/assign", headers=admin,
+                json={"container": "echo", "version": "1", "group": "lab"})
+    dev = client.get("/api/v1/admin/devices", headers=admin).json()["devices"][0]
+    assert dev["name"] == "kitchen"
+    assert dev["enrolled"] > 0
+    assert dev["desired"] == {"echo": "1"}
+    assert dev["status"] is None and dev["last_seen"] is None
+    r = client.post("/api/v1/admin/assign", headers=admin,
+                    json={"container": "echo", "version": "1", "device": "nope"})
+    assert r.status_code == 404

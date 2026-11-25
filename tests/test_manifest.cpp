@@ -5,6 +5,9 @@
 #include "release_key.h"
 #include <aember-fleet/base64.h>
 #include <aember-fleet/manifest.h>
+
+#include <span>
+#include <string_view>
 #include <wolfssl/wolfcrypt/ed25519.h>
 
 using namespace aember::fleet;
@@ -31,11 +34,24 @@ int main() {
        R"({"arch":"a","container":"../x","sha256":")" + std::string(64, 'a') +
            R"(","size":1,"version":"1"})",
        std::string{
-           R"({"arch":"a","container":"x","sha256":"zz","size":1,"version":"1"})"}}) {
+           R"({"arch":"a","container":"x","sha256":"zz","size":1,"version":"1"})"},
+       // hex, but one digit short
+       R"({"arch":"a","container":"x","sha256":")" + std::string(63, 'a') +
+           R"(","size":1,"version":"1"})"}) {
     CHECK(!VerifyManifest(key.pub, bad, key.Sign(bad)).has_value());
   }
   CHECK(ParsePublicKey(Base64Encode(key.pub)).has_value());
   CHECK(!ParsePublicKey("AAAA").has_value());
+
+  // Every padding case of the encoder (1, 2 and 0 bytes left over).
+  const auto enc = [](std::string_view s) {
+    return Base64Encode(std::span{reinterpret_cast<const std::uint8_t*>(s.data()),
+                                  s.size()});
+  };
+  CHECK_EQ(enc("a"), std::string{"YQ=="});
+  CHECK_EQ(enc("ab"), std::string{"YWI="});
+  CHECK_EQ(enc("abc"), std::string{"YWJj"});
+  CHECK_EQ(enc("abcd"), std::string{"YWJjZA=="});
 
   Sha256Hasher h;  // "abc" (FIPS 180-2)
   h.Update("a");

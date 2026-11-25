@@ -1,0 +1,9 @@
+# The server's mutation testing (mutmut): docker build -f Dockerfile.mutation
+# -t aember-fleet-mutation . && docker run --rm -v "$PWD/out:/out" aember-fleet-mutation
+# Writes /out/aember-fleet-server.md (scores per module, survivors) and .json.
+FROM python:3.12-slim
+WORKDIR /app
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt mutmut==3.8.1
+COPY . .
+CMD ["python", "tools/mutation.py", "/out"]

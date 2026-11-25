@@ -118,6 +118,18 @@ class Assign(BaseModel):
 # --- the app -------------------------------------------------------------------
 
 
+def finite(value):
+    """@p value if it is valid JSON. Python's json reads NaN and Infinity, but
+    the responses can't carry them: one device's report with a NaN made the
+    admin's device list fail for good."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except ValueError:
+        raise HTTPException(422, "NaN and Infinity are not JSON")
+    return value
+
+
+
 def create_app(data_path: Path) -> FastAPI:
     data = DataDir(data_path)
     store = data.store
@@ -159,14 +171,15 @@ def create_app(data_path: Path) -> FastAPI:
             security.public_key_from_b64(body.public_key)
         except ValueError:
             raise HTTPException(422, "public_key: base64 of 32 bytes")
+        info = finite(body.info)  # before the join token is used up
         existing = store.device_by_key(body.public_key)
         if existing is not None:  # the same device again (lost its state file)
             return {"device_id": existing["id"]}
         group = store.use_join_token(body.join_token)
         if group is None:
             raise HTTPException(403, "invalid, used up or expired join token")
-        arch = str(body.info.get("arch", "unknown"))
-        device_id = store.add_device(body.name, body.public_key, group, arch, body.info)
+        arch = str(info.get("arch", "unknown"))
+        device_id = store.add_device(body.name, body.public_key, group, arch, info)
         return {"device_id": device_id}
 
     @app.post("/api/v1/auth/challenge")
@@ -233,7 +246,7 @@ def create_app(data_path: Path) -> FastAPI:
 
     @app.post("/api/v1/device/status")
     def status(body: Status, device=Depends(device_auth)):
-        store.report(device["id"], body.model_dump())
+        store.report(device["id"], finite(body.model_dump()))
         return {"ok": True}
 
     # --- admin ---------------------------------------------------------------
@@ -277,7 +290,7 @@ def create_app(data_path: Path) -> FastAPI:
             fields = json.loads(manifest)
             container, version, arch = fields["container"], fields["version"], fields["arch"]
             sha256, size = fields["sha256"], int(fields["size"])
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, OverflowError):  # int(1e400)
             raise HTTPException(422, "X-Aember-Manifest: base64 of a release manifest")
         if manifest != security.canonical_manifest(container, version, arch, sha256, size):
             raise HTTPException(422, "manifest is not in canonical form")

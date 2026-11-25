@@ -60,6 +60,16 @@ container is stopped, a pending update is rolled back at start.
   (fleet.json), `fuzz_agent_files` (containers.json and state.json, then a
   round), `fuzz_base64`. A crash gets a fix, a `Regression:` test and its
   input in `fuzz/corpus/<target>/`.
+- Property-based tests: `tests/property.h` (`ForAll(name, runs, [](Gen&
+  g) {...})`, seeded cases, no framework: the SDK has none; the seed of a
+  failing case is printed, `AEMBER_PROPERTY_SEED`/`AEMBER_PROPERTY_RUNS`
+  rerun it or run more) in `tests/test_properties.cpp`; the updater's
+  fakes are in `tests/world.h` (`FakeControl::on_call` throws to cut the
+  agent off at any call: a power loss). The server's are Hypothesis
+  (`server/tests/test_properties.py`; JSON from a device may hold NaN and
+  Infinity: refused with 422, `finite()` in app.py). When the updater's
+  steps change, keep the updater property's invariants in line with
+  `spec/tla/FleetUpdate.tla`.
 - End-to-end tests: `tests/e2e/fleet.py` (aember system-test scenarios;
   `FleetServer` runs the server image with `--network host`, QEMU reaches it
   at 10.0.2.2; `device_image` puts auth, the agent and their configs into a

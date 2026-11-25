@@ -91,6 +91,15 @@ aember-cli/run.py build -a x64-poky-linux && aember-cli/run.py pack -a x64-poky-
 docker build -f server/Dockerfile.test -t aember-fleet-test server && docker run --rm aember-fleet-test
 ```
 
+Property-based tests check rules on many generated cases instead of a few
+examples: `tests/test_properties.cpp` (base64, signed manifests, the
+desired state, the state file, and the updater under random assignments,
+agent stops and power losses against the TLA+ model's invariants) and
+`server/tests/test_properties.py` (Hypothesis: tokens, manifests,
+signatures, the API's answers to any upload or device report). A failing
+C++ case prints the seed that reproduces it:
+`AEMBER_PROPERTY_SEED=<seed> AEMBER_PROPERTY_RUNS=1 build/.../properties-unittest`.
+
 `spec/tla/check.sh` model-checks the update with TLC (power loss at any
 step, the assignment changing at any time; `spec/tla/README.md`).
 

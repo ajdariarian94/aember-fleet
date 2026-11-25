@@ -208,3 +208,25 @@ def test_admin_needs_the_admin_token(fleet):
                          ("GET", "/api/v1/admin/artifacts")):
         r = client.request(method, path, json={}, headers={"Authorization": "Bearer nope"})
         assert r.status_code == 401
+
+
+def test_nan_from_a_device_is_refused(fleet, tmp_path):
+    """Regression: Python's json reads NaN and Infinity; a device's status
+    report (or enrollment info) with one was stored, and from then on the
+    admin's device list failed with a server error (its response can't carry
+    NaN). Found by test_properties.py. Now such a body is refused (422)."""
+    client, admin, _, _ = fleet
+    device = Device(client)
+    body = {"join_token": join_token(client, admin), "public_key": device.pub,
+            "name": "dev", "info": {"x": float("nan")}}
+    send = {"Content-Type": "application/json"}
+    r = client.post("/api/v1/enroll", content=json.dumps(body), headers=send)
+    assert r.status_code == 422
+    body["info"] = {}
+    r = client.post("/api/v1/enroll", content=json.dumps(body), headers=send)
+    device.id = r.json()["device_id"]
+    r = client.post("/api/v1/device/status",
+                    content=json.dumps({"containers": [{"cpu": float("inf")}]}),
+                    headers={**send, **device.login()})
+    assert r.status_code == 422
+    assert client.get("/api/v1/admin/devices", headers=admin).status_code == 200

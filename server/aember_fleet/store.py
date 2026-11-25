@@ -108,7 +108,8 @@ class Store:
         self._q(
             "INSERT INTO devices (id, name, public_key, grp, arch, info, enrolled)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (device_id, name, public_key, group, arch, json.dumps(info), time.time()),
+            (device_id, name, public_key, group, arch, json.dumps(info, allow_nan=False),
+             time.time()),
         )
         return device_id
 
@@ -133,7 +134,7 @@ class Store:
     def report(self, device_id: str, status: dict) -> None:
         self._q(
             "UPDATE devices SET last_seen = ?, status = ? WHERE id = ?",
-            (time.time(), json.dumps(status), device_id),
+            (time.time(), json.dumps(status, allow_nan=False), device_id),
         )
 
     def seen(self, device_id: str) -> None:

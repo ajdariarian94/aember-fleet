@@ -40,4 +40,7 @@ Container updates for aember fleets (README.md). Two parts:
   `containers.json`.
 - wolfSSL: `<wolfssl/options.h>` first; its compat macros rename words
   like `Sha256` (hence `Sha256Hasher`).
+- A test that pins down a fixed bug starts with a comment
+  `Regression: <the bug>` (`grep -rn "Regression:"` lists them). Every bug
+  fix gets one.
 - Commit as Arian Ajdari; branches + PRs; merge when tests pass.

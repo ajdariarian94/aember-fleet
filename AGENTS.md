@@ -47,8 +47,16 @@ container is stopped, a pending update is rolled back at start.
   devices only verify. Uploads without a valid signature are refused.
 - The agent never updates itself, and only containers in the device's
   `containers.json`.
-- wolfSSL: `<wolfssl/options.h>` first; its compat macros rename words
-  like `Sha256` (hence `Sha256Hasher`).
+- Licensing: the agent ships under the Aember License, so it must not link
+  GPL code. Ed25519 is Monocypher's (`third_party/monocypher`, vendored
+  4.0.2, BSD-2-Clause). SHA-256 has two backends, `-DAEMBER_FLEET_CRYPTO`:
+  `src/sha256-mbedtls.cpp` (Apache-2.0; builds against mbedTLS 2.28 and
+  3.6) and `src/sha256-wolfssl.cpp` (GPL-2.0-only), the SDK default only
+  until the aember-resources SDK carries mbedTLS; then the default flips
+  and the wolfSSL file goes (aember's `doc/licensing/`). `cmake/backends.cmake`
+  sets both up for the SDK and fuzz builds; CI's `host` job tests both.
+  wolfSSL: `<wolfssl/options.h>` first; its compat macros rename words like
+  `Sha256` (hence `Sha256Hasher`).
 - A test that pins down a fixed bug starts with a comment
   `Regression: <the bug>` (`grep -rn "Regression:"` lists them). Every bug
   fix gets one.
@@ -61,7 +69,7 @@ container is stopped, a pending update is rolled back at start.
   and base64 padding), server 43% -> 70% (1358 mutants; most of the rest
   are equivalent: SQL keyword case, message texts).
 - Fuzzing: `fuzz/run.sh [SECONDS] [TARGET...]` (CI: 60 s per target, the
-  `fuzz` job). It is a host build with clang 18 and Ubuntu's wolfSSL and
+  `fuzz` job). It is a host build with clang 18 and Ubuntu's mbedTLS and
   nlohmann-json (the SDK has no libFuzzer). Targets: `fuzz_clients` (both
   sockets answering anything), `fuzz_desired`, `fuzz_manifest` (also signed
   with a test key, to reach the JSON checks), `fuzz_agent_config`

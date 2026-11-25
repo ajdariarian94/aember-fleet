@@ -6,7 +6,7 @@
 #
 # Needs clang-18 with libFuzzer (libclang-rt-18-dev; llvm-18 for symbolized
 # stack traces), cmake, ninja,
-# pkg-config, libwolfssl-dev, nlohmann-json3-dev (Ubuntu 24.04). The seed
+# pkg-config, libmbedtls-dev, nlohmann-json3-dev (Ubuntu 24.04). The seed
 # corpus fuzz/corpus/<target>/ is copied to build/fuzz/corpus/<target>/,
 # which keeps what the fuzzer finds; crashes go to build/fuzz/crashes/.
 # Reproduce one: build/fuzz/fuzz_<target> build/fuzz/crashes/<target>/crash-...
@@ -20,7 +20,7 @@ if [ -x /usr/lib/llvm-18/bin/llvm-symbolizer ]; then
   export ASAN_SYMBOLIZER_PATH=/usr/lib/llvm-18/bin/llvm-symbolizer
 fi
 export UBSAN_OPTIONS=print_stacktrace=1
-CXX=${CXX:-clang++-18} cmake -S fuzz -B "$OUT" -G Ninja -DCMAKE_BUILD_TYPE=None >/dev/null
+CC=${CC:-clang-18} CXX=${CXX:-clang++-18} cmake -S fuzz -B "$OUT" -G Ninja -DCMAKE_BUILD_TYPE=None >/dev/null
 cmake --build "$OUT" -j "${JOBS:-8}"
 
 targets=("$@")

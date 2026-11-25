@@ -1,7 +1,7 @@
 # libFuzzer targets for the agent's parsers: a host build with clang
 # (ASan + UBSan), apart from the SDK build. fuzz/run.sh builds and runs them.
 cmake_minimum_required(VERSION 3.25)
-project(aember-fleet-agent-fuzz LANGUAGES CXX)
+project(aember-fleet-agent-fuzz LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,16 +18,18 @@ set(SANITIZE -fsanitize=address,undefined -fno-sanitize-recover=all
 add_compile_options(-g -O1 -Wall -Wextra ${SANITIZE} -fsanitize=fuzzer-no-link)
 add_link_options(${SANITIZE})
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(WOLFSSL REQUIRED IMPORTED_TARGET wolfssl)
+# mbedTLS by default (Ubuntu's libmbedtls-dev): the backend we ship next.
+set(AEMBER_FLEET_CRYPTO "mbedtls" CACHE STRING "SHA-256 backend: mbedtls or wolfssl")
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/backends.cmake)
 find_package(nlohmann_json 3 REQUIRED)
 
 set(SRC ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 add_library(aember-fleet-agent-lib STATIC ${SRC}/base64.cpp ${SRC}/manifest.cpp
-                                          ${SRC}/updater.cpp ${SRC}/clients.cpp)
+                                          ${SRC}/updater.cpp ${SRC}/clients.cpp
+                                          ${AEMBER_FLEET_CRYPTO_SOURCE})
 target_include_directories(aember-fleet-agent-lib
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../include)
-target_link_libraries(aember-fleet-agent-lib PUBLIC PkgConfig::WOLFSSL
+target_link_libraries(aember-fleet-agent-lib PUBLIC aember-fleet-crypto monocypher
                                                     nlohmann_json::nlohmann_json)
 
 foreach(target base64 manifest desired agent_config agent_files clients)

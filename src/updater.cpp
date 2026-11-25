@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 
+#include <fcntl.h>
 #include <unistd.h>
 
 #include <aember-fleet/updater.h>
@@ -116,6 +117,20 @@ void Updater::LoadState() {
   }
 }
 
+void SyncDir(const std::string& dir) {
+  const int fd = ::open(dir.empty() ? "." : dir.c_str(),
+                        O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (fd < 0) return;
+  ::fsync(fd);
+  ::close(fd);
+}
+
+void Updater::DurableRename(const std::string& from, const std::string& to,
+                            std::error_code& ec) const {
+  fs::rename(from, to, ec);
+  if (!ec && sync_dir) sync_dir(fs::path{to}.parent_path().string());
+}
+
 void Updater::SaveState() const {
   nlohmann::json j{{"containers", nlohmann::json::object()}};
   for (const auto& [name, e] : entries_) {
@@ -132,12 +147,13 @@ void Updater::SaveState() const {
     out << j.dump(2) << '\n';
     out.flush();
   }
-  // The pending update must be on disk before the container is stopped.
+  // The pending update must be on disk before the container is stopped:
+  // the file's contents, then (DurableRename) its new name.
   if (FILE* f = std::fopen(tmp.c_str(), "r+")) {
     ::fsync(::fileno(f));
     std::fclose(f);
   }
-  fs::rename(tmp, config_.state_file, ec);
+  DurableRename(tmp, config_.state_file, ec);
 }
 
 void Updater::Recover() {
@@ -148,7 +164,7 @@ void Updater::Recover() {
     if (!fs::exists(image, ec) && fs::exists(image + ".prev", ec)) {
       std::cerr << "aember-fleet-agent: " << name
                 << ": image missing, restoring " << image << ".prev\n";
-      fs::rename(image + ".prev", image, ec);
+      DurableRename(image + ".prev", image, ec);
       std::ignore = control_.Start(name);
     }
   }
@@ -278,7 +294,7 @@ void Updater::Update(const DesiredContainer& want) {
 void Updater::RollBack(const std::string& name, const std::string& image) {
   std::ignore = control_.Stop(name);
   std::error_code ec;
-  fs::rename(image + ".prev", image, ec);
+  DurableRename(image + ".prev", image, ec);
   std::ignore = control_.Start(name);
 }
 
@@ -307,6 +323,12 @@ std::expected<void, std::string> Updater::Install(const DesiredContainer& want,
              : std::string{"download doesn't match the manifest"});
     }
   }
+  // The new image's bytes on disk before it replaces the old one: after a
+  // power loss the image must never be a half-written file.
+  if (FILE* f = std::fopen(next.c_str(), "r+")) {
+    ::fsync(::fileno(f));
+    std::fclose(f);
+  }
   // .prev: a hard link to the current image (a copy where links don't
   // work), put in place with one rename. The image itself stays.
   std::error_code ec;
@@ -315,7 +337,7 @@ std::expected<void, std::string> Updater::Install(const DesiredContainer& want,
   fs::remove(prev_tmp, ec);
   fs::create_hard_link(image, prev_tmp, ec);
   if (ec) fs::copy_file(image, prev_tmp, ec);
-  if (!ec) fs::rename(prev_tmp, prev, ec);
+  if (!ec) DurableRename(prev_tmp, prev, ec);
   if (ec) {
     fs::remove(prev_tmp, ec);
     fs::remove(next, ec);
@@ -330,7 +352,7 @@ std::expected<void, std::string> Updater::Install(const DesiredContainer& want,
     SaveState();
     return std::unexpected("stop: " + r.error());
   }
-  fs::rename(next, image, ec);  // atomic: the old image or the new one
+  DurableRename(next, image, ec);  // atomic: the old image or the new one
   if (ec) {
     fs::remove(next, ec);
     std::ignore = control_.Start(want.name);

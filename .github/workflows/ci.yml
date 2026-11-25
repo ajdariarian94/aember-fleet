@@ -79,3 +79,87 @@ jobs:
           path: |
             build/fuzz/crashes
             build/fuzz/*.log
+
+  e2e:
+    # tests/e2e/fleet.py through tools/e2e.sh: the server image and a QEMU
+    # device (aember main, built and packed here like aember's own system
+    # tests) with aember-auth (main) and this agent.
+    name: End to end (server + QEMU device)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      AEMBER_DEV_IMAGE: ghcr.io/ajdariarian94/aember-dev:latest
+      AEMBER_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: aember-fleet
+          submodules: true
+      - uses: actions/checkout@v4
+        with:
+          repository: ajdariarian94/aember-auth
+          path: aember-auth
+          submodules: true
+      - uses: actions/checkout@v4
+        with:
+          repository: ajdariarian94/aember
+          path: aember
+          submodules: true
+      - name: Free disk space
+        run: aember/tools/ci/free-disk.sh
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build squashfs-tools
+      - name: SDK version
+        id: sdk
+        run: echo "version=$(sed -n 's/^RESOURCES_VERSION = "\(.*\)"/\1/p' aember-fleet/aember-cli/run.py)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: aember-fleet/build/aember-resources/x64-poky-linux/sdk
+          key: aember-sdk-e2e-x64-poky-linux-v${{ steps.sdk.outputs.version }}
+      - name: Build and pack the agent and aember-auth
+        env:
+          # One SDK for both (same aember-resources version).
+          AEMBER_RESOURCES_DIR: ${{ github.workspace }}/aember-fleet/build/aember-resources
+        run: |
+          for repo in aember-fleet aember-auth; do
+            (cd $repo && python3 aember-cli/run.py sdk -a x64-poky-linux \
+              && python3 aember-cli/run.py build -a x64-poky-linux \
+              && python3 aember-cli/run.py pack -a x64-poky-linux)
+          done
+      - name: vcpkg binary cache (aember)
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/cache/vcpkg
+          key: vcpkg-aember-x64-release-${{ hashFiles('aember/vcpkg.json', 'aember/tools/toolchains/*.cmake') }}-${{ github.sha }}
+          restore-keys: |
+            vcpkg-aember-x64-release-${{ hashFiles('aember/vcpkg.json', 'aember/tools/toolchains/*.cmake') }}-
+      - name: Pull the dev image
+        run: docker pull "$AEMBER_DEV_IMAGE"
+      - name: Hand aember to the image's user
+        run: |
+          mkdir -p "$RUNNER_TEMP/cache"
+          sudo chown -R 1000:1000 aember "$RUNNER_TEMP/cache"
+      - name: KVM for QEMU (when the runner has it; else TCG)
+        run: |
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; echo "KVM: yes"; else echo "KVM: no"; fi
+      - name: Build and pack aember x64 Release
+        env:
+          AEMBER_CI_CACHE: ${{ runner.temp }}/cache
+          AEMBER_CI_DOCKER: "1"
+        run: aember/tools/ci/run.sh bash -c "aember app build && aember app pack"
+      - name: End-to-end tests
+        env:
+          AEMBER_DIR: aember
+          AEMBER_IMAGE: packed
+          AUTH_BUNDLE: aember-auth/build/aember-out/x64-poky-linux/aember-auth
+          AGENT_BUNDLE: aember-fleet/build/aember-out/x64-poky-linux/aember-fleet-agent
+        run: aember-fleet/tools/e2e.sh --timeout-scale 3
+      - name: Summary
+        if: always()
+        run: cat aember/build/ci-summary.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      - name: Consoles
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-consoles
+          path: aember/build/system-tests/x64-poky-linux/*.log

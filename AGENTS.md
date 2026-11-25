@@ -60,6 +60,17 @@ container is stopped, a pending update is rolled back at start.
   (fleet.json), `fuzz_agent_files` (containers.json and state.json, then a
   round), `fuzz_base64`. A crash gets a fix, a `Regression:` test and its
   input in `fuzz/corpus/<target>/`.
+- End-to-end tests: `tests/e2e/fleet.py` (aember system-test scenarios;
+  `FleetServer` runs the server image with `--network host`, QEMU reaches it
+  at 10.0.2.2; `device_image` puts auth, the agent and their configs into a
+  copy of aember's image) run by `tools/e2e.sh`, CI job `e2e`. Change them
+  with the agent's behaviour or its log lines (`... didn't stay up: rolling
+  back`, `update was interrupted (n), rolling back`). They are also the
+  base of a fleet demo (a server and an enrolled device in one go).
+- Durability: every rename the update relies on goes through
+  `DurableRename` (rename + directory fsync), files are fsync'd before
+  their rename. Without the directory sync a power cut lost the `pending`
+  mark (caught by `fleet-power-loss`).
 - nlohmann/json: `value()` and `get<T>()` throw on another type, and a
   double converted to int out of range is undefined behaviour. JSON from
   outside the process (sockets, the server, files) is read with type

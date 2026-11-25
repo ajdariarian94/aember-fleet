@@ -77,7 +77,7 @@ and saved its state only at the end of a round:
 
 The agent now: `.prev` is a hard link (copy where links fail) put in place
 with one rename, so the image never goes away; the update is saved as
-`pending` (fsync) before the container is stopped; `.new` replaces the image
+`pending` (file and directory fsync'd) before the container is stopped; `.new` replaces the image
 with one rename; a health check cut short by SIGTERM decides nothing;
 a restarted agent rolls a pending update back first, and a version
 interrupted `kMaxInterrupts` (2) times counts as failed. It also restores an
@@ -92,3 +92,7 @@ image left only as `.prev` by the older agent.
   crashes and is restarted by containerd between two samples can pass.
 - Stopping and starting the container are folded into the steps around
   them; their failures end the round with an error and no change on disk.
+- Each step's write is durable at once in the model. On a device that
+  takes an fsync of the file and of its directory (`SyncDir` after every
+  rename the model relies on): without the directory's, a power cut lost
+  the `pending` mark, which the `fleet-power-loss` end-to-end test caught.

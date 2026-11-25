@@ -101,6 +101,31 @@ pkg-config libwolfssl-dev nlohmann-json3-dev` installed: `fuzz/run.sh` (every
 target for 60 s, as CI does); crashing inputs land in
 `build/fuzz/crashes/<target>/`.
 
-Tested end to end in aember's QEMU x64: enrollment and login over TLS, an
-update of aember-echo to a signed v2, and the rollback of a v3 that exits at
-once.
+## End-to-end tests
+
+`tests/e2e/fleet.py` runs the server (its Docker image) against an aember
+device in QEMU with aember-auth and this agent installed, as aember system-test
+scenarios (`aember systemtest --scenarios`):
+
+- **fleet-update**: the device enrolls and logs in over TLS; a signed
+  aember-echo v2 is installed and runs; a v3 that exits at once is rolled
+  back to v2, marked failed and not tried again.
+- **fleet-power-loss**: QEMU is killed while v2 is on trial; after the
+  reboot the image is the old one or v2 (never missing), the agent rolls
+  the interrupted update back, then installs v2 for good.
+
+```bash
+aember-cli/run.py build -a x64-poky-linux && aember-cli/run.py pack -a x64-poky-linux
+(cd ../aember-auth && aember-cli/run.py build -a x64-poky-linux && aember-cli/run.py pack -a x64-poky-linux)
+AEMBER_IMAGE=packed tools/e2e.sh            # -k fleet-update, --timeout-scale 3, ...
+```
+
+`tools/e2e.sh` (header: its inputs) builds the server image and runs the
+scenarios in a `docker run` of aember's dev image with the sibling `../aember`
+checkout's CLI. `AEMBER_IMAGE=packed` boots that checkout's `aember app
+pack` output; the default, `release`, boots aember's latest release (it
+needs aember-containerd's control socket, i.e. a release after v0.14.0).
+The device's join token, CA and fleet.json are generated per run into a
+copy of the image under `../aember/build/system-tests/`, never into a
+board's overlay. CI job `e2e` builds aember main, aember-auth main and this
+agent, then runs both scenarios (~2 min with KVM).

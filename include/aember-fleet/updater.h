@@ -94,6 +94,10 @@ inline constexpr int kMaxInterrupts = 2;
 std::expected<AgentConfig, std::string> ParseAgentConfig(
     const nlohmann::json& j);
 
+/// fsync of a directory: makes a rename in it survive a power loss (the
+/// file's own fsync doesn't cover its directory entry).
+void SyncDir(const std::string& dir);
+
 class Updater {
  public:
   /// Waits; returns false when the agent is being stopped (SIGTERM): a
@@ -109,6 +113,10 @@ class Updater {
 
   /// What the last round did, per container (also the status report).
   [[nodiscard]] nlohmann::json Status() const;
+
+  /// Called with a directory after each rename in it that must survive a
+  /// power loss (state file, image swap); SyncDir. Tests record the calls.
+  std::function<void(const std::string&)> sync_dir = SyncDir;
 
  private:
   struct Entry {
@@ -130,6 +138,9 @@ class Updater {
                                            const Manifest& m,
                                            const std::string& image, Entry& e);
   void RollBack(const std::string& name, const std::string& image);
+  /// fs::rename, then sync_dir of the target's directory.
+  void DurableRename(const std::string& from, const std::string& to,
+                     std::error_code& ec) const;
   Health Check(const std::string& name);
 
   AgentConfig config_;

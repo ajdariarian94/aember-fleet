@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -323,6 +324,30 @@ int main() {
     c = ParseAgentConfig(
         {{"release_public_key", pub}, {"arch", kArch}, {"health_seconds", -4}});
     CHECK(c.has_value() && c->health_seconds == 1);
+  }
+  {
+    // Regression: the state file's rename wasn't synced (only the file
+    // was), so after a power cut during an update the "pending" mark was
+    // gone and the interrupted update wasn't counted (found by the
+    // fleet-power-loss end-to-end test). Every rename that must survive a
+    // power loss syncs its directory, the pending state before the stop.
+    World w;
+    Updater u{w.config, w.fleet, w.control, NoSleep};
+    std::vector<std::string> synced;
+    u.sync_dir = [&](const std::string& d) { synced.push_back(d); };
+    const auto state_dir = fs::path{w.config.state_file}.parent_path().string();
+    const auto image_dir = fs::path{w.image}.parent_path().string();
+    bool pending_synced = false;
+    w.control.on_stop = [&] {
+      pending_synced =
+          Read(w.config.state_file).contains(R"("pending": "2")") &&
+          !synced.empty() && synced.back() == state_dir;
+    };
+    w.Assign("2", "v2 image");
+    u.RunOnce();
+    CHECK(pending_synced);
+    CHECK(std::ranges::count(synced, image_dir) >= 2);  // .prev, the swap
+    CHECK_EQ(Read(w.image), std::string{"v2 image"});
   }
   CHECK(!ParseDesired(nlohmann::json{{"containers", {{{"name", "x"}}}}})
              .has_value());

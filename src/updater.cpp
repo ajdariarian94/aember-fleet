@@ -4,6 +4,8 @@
 #include <fstream>
 #include <iostream>
 
+#include <unistd.h>
+
 #include <aember-fleet/updater.h>
 
 namespace aember::fleet {
@@ -61,6 +63,11 @@ void Updater::LoadState() {
     for (const auto& f : e.value("failed", nlohmann::json::array())) {
       entry.failed.insert(f.get<std::string>());
     }
+    entry.pending = e.value("pending", std::string{});
+    const auto interrupted = e.value("interrupted", nlohmann::json::object());
+    for (const auto& [v, n] : interrupted.items()) {
+      if (n.is_number_integer()) entry.interrupted[v] = n.get<int>();
+    }
     entries_[name] = entry;
   }
 }
@@ -68,7 +75,10 @@ void Updater::LoadState() {
 void Updater::SaveState() const {
   nlohmann::json j{{"containers", nlohmann::json::object()}};
   for (const auto& [name, e] : entries_) {
-    j["containers"][name] = {{"version", e.version}, {"failed", e.failed}};
+    auto& c = j["containers"][name];
+    c = {{"version", e.version}, {"failed", e.failed}};
+    if (!e.pending.empty()) c["pending"] = e.pending;
+    if (!e.interrupted.empty()) c["interrupted"] = e.interrupted;
   }
   std::error_code ec;
   fs::create_directories(fs::path{config_.state_file}.parent_path(), ec);
@@ -76,8 +86,47 @@ void Updater::SaveState() const {
   {
     std::ofstream out{tmp};
     out << j.dump(2) << '\n';
+    out.flush();
+  }
+  // The pending update must be on disk before the container is stopped.
+  if (FILE* f = std::fopen(tmp.c_str(), "r+")) {
+    ::fsync(::fileno(f));
+    std::fclose(f);
   }
   fs::rename(tmp, config_.state_file, ec);
+}
+
+void Updater::Recover() {
+  // A power loss between the two renames of an older agent left no image,
+  // only .prev: put it back.
+  for (const auto& [name, image] : images_) {
+    std::error_code ec;
+    if (!fs::exists(image, ec) && fs::exists(image + ".prev", ec)) {
+      std::cerr << "aember-fleet-agent: " << name
+                << ": image missing, restoring " << image << ".prev\n";
+      fs::rename(image + ".prev", image, ec);
+      std::ignore = control_.Start(name);
+    }
+  }
+  // An update cut short (power loss, agent stopped): its image never proved
+  // itself. Counted first (and saved), so a recovery cut short counts too.
+  for (auto& [name, e] : entries_) {
+    if (e.pending.empty()) continue;
+    const std::string version = e.pending;
+    const int n = ++e.interrupted[version];
+    if (n >= kMaxInterrupts) e.failed.insert(version);
+    SaveState();
+    std::cerr << "aember-fleet-agent: " << name << " " << version
+              << ": update was interrupted (" << n << "), rolling back\n";
+    if (const auto image = images_.find(name); image != images_.end()) {
+      std::error_code ec;
+      if (fs::exists(image->second + ".prev", ec)) {
+        RollBack(name, image->second);
+      }
+    }
+    e.pending.clear();
+    SaveState();
+  }
 }
 
 nlohmann::json Updater::Status() const {
@@ -94,6 +143,10 @@ nlohmann::json Updater::Status() const {
 
 int Updater::RunOnce() {
   LoadImages();
+  if (!recovered_) {
+    Recover();
+    recovered_ = true;
+  }
   auto desired = fleet_.GetDesired();
   if (!desired) {
     std::cerr << "aember-fleet-agent: " << desired.error() << '\n';
@@ -149,32 +202,46 @@ void Updater::Update(const DesiredContainer& want) {
   std::cerr << "aember-fleet-agent: " << want.name << ": "
             << (e.version.empty() ? "image" : e.version) << " -> "
             << want.version << '\n';
-  if (auto r = Install(want, *m, image->second); !r) {
+  if (auto r = Install(want, *m, image->second, e); !r) {
     fail("error", r.error());
     return;
   }
-  if (Healthy(want.name)) {
-    e.version = want.version;
-    e.state = "updated";
-    std::cerr << "aember-fleet-agent: " << want.name << " " << want.version
-              << " runs\n";
-    return;
+  switch (Check(want.name)) {
+    case Health::kHealthy:
+      e.version = want.version;
+      e.pending.clear();
+      e.state = "updated";
+      std::cerr << "aember-fleet-agent: " << want.name << " " << want.version
+                << " runs\n";
+      break;
+    case Health::kUnhealthy:
+      std::cerr << "aember-fleet-agent: " << want.name << " " << want.version
+                << " didn't stay up: rolling back\n";
+      RollBack(want.name, image->second);
+      e.failed.insert(want.version);
+      e.pending.clear();
+      e.state = "rolled-back";
+      e.error = std::format("version {} didn't stay running", want.version);
+      break;
+    case Health::kInterrupted:
+      // Stopping: the next agent rolls it back (still pending).
+      fail("interrupted", "the agent was stopped during the health check");
+      return;
   }
-  // Roll back to the previous image.
-  std::cerr << "aember-fleet-agent: " << want.name << " " << want.version
-            << " didn't stay up: rolling back\n";
-  std::ignore = control_.Stop(want.name);
+  SaveState();
+}
+
+void Updater::RollBack(const std::string& name, const std::string& image) {
+  std::ignore = control_.Stop(name);
   std::error_code ec;
-  fs::rename(image->second + ".prev", image->second, ec);
-  std::ignore = control_.Start(want.name);
-  e.failed.insert(want.version);
-  e.state = "rolled-back";
-  e.error = std::format("version {} didn't stay running", want.version);
+  fs::rename(image + ".prev", image, ec);
+  std::ignore = control_.Start(name);
 }
 
 std::expected<void, std::string> Updater::Install(const DesiredContainer& want,
                                                   const Manifest& m,
-                                                  const std::string& image) {
+                                                  const std::string& image,
+                                                  Entry& e) {
   const std::string next = image + ".new";
   {
     std::ofstream out{next, std::ios::binary | std::ios::trunc};
@@ -196,34 +263,48 @@ std::expected<void, std::string> Updater::Install(const DesiredContainer& want,
              : std::string{"download doesn't match the manifest"});
     }
   }
+  // .prev: a hard link to the current image (a copy where links don't
+  // work), put in place with one rename. The image itself stays.
+  std::error_code ec;
+  const std::string prev = image + ".prev";
+  const std::string prev_tmp = prev + ".tmp";
+  fs::remove(prev_tmp, ec);
+  fs::create_hard_link(image, prev_tmp, ec);
+  if (ec) fs::copy_file(image, prev_tmp, ec);
+  if (!ec) fs::rename(prev_tmp, prev, ec);
+  if (ec) {
+    fs::remove(prev_tmp, ec);
+    fs::remove(next, ec);
+    return std::unexpected("cannot keep the previous image");
+  }
+  // From here on a power loss leaves a pending update for Recover().
+  e.pending = want.version;
+  SaveState();
   if (auto r = control_.Stop(want.name); !r) {
-    fs::remove(next);
+    fs::remove(next, ec);
+    e.pending.clear();
+    SaveState();
     return std::unexpected("stop: " + r.error());
   }
-  std::error_code ec;
-  fs::rename(image, image + ".prev", ec);
+  fs::rename(next, image, ec);  // atomic: the old image or the new one
   if (ec) {
-    fs::remove(next);
+    fs::remove(next, ec);
     std::ignore = control_.Start(want.name);
-    return std::unexpected("cannot keep the previous image: " + ec.message());
-  }
-  fs::rename(next, image, ec);
-  if (ec) {
-    fs::rename(image + ".prev", image, ec);
-    std::ignore = control_.Start(want.name);
+    e.pending.clear();
+    SaveState();
     return std::unexpected("cannot put the new image in place");
   }
-  std::ignore = control_.Start(want.name);  // a failed start: Healthy says no
+  std::ignore = control_.Start(want.name);  // a failed start: Check says no
   return {};
 }
 
-bool Updater::Healthy(const std::string& name) {
+Updater::Health Updater::Check(const std::string& name) {
   for (int i = 0; i < std::max(1, config_.health_seconds); ++i) {
-    sleep_(std::chrono::seconds{1});
+    if (!sleep_(std::chrono::seconds{1})) return Health::kInterrupted;
     const auto state = control_.State(name);
-    if (!state || *state != "running") return false;
+    if (!state || *state != "running") return Health::kUnhealthy;
   }
-  return true;
+  return Health::kHealthy;
 }
 
 }  // namespace aember::fleet

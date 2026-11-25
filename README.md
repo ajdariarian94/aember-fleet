@@ -28,9 +28,11 @@ device:  aember-auth ◄── socket ── aember-fleet-agent ── control s
 2. The admin assigns a version to a group (`lab`) or a device.
 3. The agent polls (`GET /api/v1/device/desired`), checks the signature,
    downloads the image next to the current one and checks size and SHA-256.
-4. It stops the container through aember-containerd's control socket,
-   keeps the current image as `<image>.prev`, puts the new one in place and
-   starts it.
+4. It keeps the current image as `<image>.prev` (a hard link), saves the
+   update as pending, stops the container through aember-containerd's
+   control socket, puts the new image in place with one rename and starts
+   it. The image is never missing, and a power loss at any step is rolled
+   back by the next agent (an update interrupted twice counts as failed).
 5. If the container isn't running at any moment of the health window
    (20 s), the agent restores `.prev`, starts it again, and marks that
    version failed (not tried again until another is assigned).
@@ -88,6 +90,9 @@ aember-cli/run.py test                 # agent unit tests (x64 SDK)
 aember-cli/run.py build -a x64-poky-linux && aember-cli/run.py pack -a x64-poky-linux
 docker build -f server/Dockerfile.test -t aember-fleet-test server && docker run --rm aember-fleet-test
 ```
+
+`spec/tla/check.sh` model-checks the update with TLC (power loss at any
+step, the assignment changing at any time; `spec/tla/README.md`).
 
 Tested end to end in aember's QEMU x64: enrollment and login over TLS, an
 update of aember-echo to a signed v2, and the rollback of a v3 that exits at

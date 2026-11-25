@@ -24,11 +24,12 @@ void OnSignal(int) {
   g_stop = true;
 }
 
-void Sleep(std::chrono::seconds s) {
+bool Sleep(std::chrono::seconds s) {
   const auto until = std::chrono::steady_clock::now() + s;
   while (!g_stop && std::chrono::steady_clock::now() < until) {
     std::this_thread::sleep_for(std::chrono::milliseconds{200});
   }
+  return !g_stop;
 }
 
 }  // namespace

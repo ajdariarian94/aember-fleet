@@ -89,6 +89,11 @@ struct AgentConfig {
 /// Updates of one version interrupted this often count as failed.
 inline constexpr int kMaxInterrupts = 2;
 
+/// fleet.json: release_public_key (base64), arch, health_seconds (1..3600,
+/// default 20); errors name the bad field.
+std::expected<AgentConfig, std::string> ParseAgentConfig(
+    const nlohmann::json& j);
+
 class Updater {
  public:
   /// Waits; returns false when the agent is being stopped (SIGTERM): a

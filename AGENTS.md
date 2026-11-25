@@ -18,7 +18,7 @@ Container updates for aember fleets (README.md). Two parts:
   "0.1.15"`: wolfSSL and nlohmann/json in the SDK). `updater.h` is the logic
   behind two interfaces (`FleetApi`, `ContainerControl`); `clients.h` has
   the real ones (aember-auth's socket, aember-containerd's control socket);
-  the tests use fakes.
+  the tests use fakes. `fuzz/`: libFuzzer targets for the agent.
 
 ## Interfaces (change both sides together)
 
@@ -52,4 +52,17 @@ container is stopped, a pending update is rolled back at start.
 - A test that pins down a fixed bug starts with a comment
   `Regression: <the bug>` (`grep -rn "Regression:"` lists them). Every bug
   fix gets one.
+- Fuzzing: `fuzz/run.sh [SECONDS] [TARGET...]` (CI: 60 s per target, the
+  `fuzz` job). It is a host build with clang 18 and Ubuntu's wolfSSL and
+  nlohmann-json (the SDK has no libFuzzer). Targets: `fuzz_clients` (both
+  sockets answering anything), `fuzz_desired`, `fuzz_manifest` (also signed
+  with a test key, to reach the JSON checks), `fuzz_agent_config`
+  (fleet.json), `fuzz_agent_files` (containers.json and state.json, then a
+  round), `fuzz_base64`. A crash gets a fix, a `Regression:` test and its
+  input in `fuzz/corpus/<target>/`.
+- nlohmann/json: `value()` and `get<T>()` throw on another type, and a
+  double converted to int out of range is undefined behaviour. JSON from
+  outside the process (sockets, the server, files) is read with type
+  checks (`Text()`, `Number()`, `IsTrue()` in updater.cpp/clients.cpp); a
+  broken entry is skipped, never fatal.
 - Commit as Arian Ajdari; branches + PRs; merge when tests pass.

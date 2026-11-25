@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <format>
@@ -12,10 +13,45 @@ namespace aember::fleet {
 
 namespace fs = std::filesystem;
 
+namespace {
+
+/// @p j[@p key] as a whole number in [@p lo, @p hi] (clamped), @p fallback
+/// when it is missing or not a number. Doubles are clamped before the
+/// conversion: an out-of-range one doesn't fit an int.
+int Number(const nlohmann::json& j, const char* key, int fallback, int lo,
+           int hi) {
+  if (!j.is_object() || !j.contains(key) || !j[key].is_number())
+    return fallback;
+  const auto v = j[key].get<double>();
+  if (v != v) return fallback;  // NaN can't come from JSON, but still
+  return static_cast<int>(std::clamp(v, double(lo), double(hi)));
+}
+
+/// @p j[@p key] if it is a string, else "".
+std::string Text(const nlohmann::json& j, const char* key) {
+  if (!j.is_object() || !j.contains(key) || !j[key].is_string()) return {};
+  return j[key].get<std::string>();
+}
+
+}  // namespace
+
+std::expected<AgentConfig, std::string> ParseAgentConfig(
+    const nlohmann::json& j) {
+  if (!j.is_object()) return std::unexpected("not a JSON object");
+  AgentConfig config;
+  const auto key = ParsePublicKey(Text(j, "release_public_key"));
+  if (!key) return std::unexpected(key.error());
+  config.release_key = *key;
+  config.arch = Text(j, "arch");
+  if (config.arch.empty()) return std::unexpected("'arch' is missing");
+  config.health_seconds = Number(j, "health_seconds", 20, 1, 3600);
+  return config;
+}
+
 std::expected<Desired, std::string> ParseDesired(const nlohmann::json& j) {
   Desired d;
   try {
-    d.poll_interval = std::clamp(j.value("poll_interval", 60), 5, 86400);
+    d.poll_interval = Number(j, "poll_interval", 60, 5, 86400);
     for (const auto& c : j.at("containers")) {
       d.containers.push_back({c.at("name").get<std::string>(),
                               c.at("version").get<std::string>(),
@@ -44,12 +80,13 @@ void Updater::LoadImages() {
   const auto j = nlohmann::json::parse(in, nullptr, false);
   if (!j.is_object() || !j.contains("containers")) return;
   for (const auto& c : j["containers"]) {
-    if (!c.is_object() || !c.contains("name") || !c.contains("container"))
-      continue;
-    const auto path = c["container"].value("squashfs", std::string{});
-    if (!path.empty()) {
-      images_[c["name"].get<std::string>()] = config_.host_root + path;
-    }
+    // Entries that aren't what aember writes are skipped, not fatal.
+    const auto name = Text(c, "name");
+    const auto path = c.is_object() && c.contains("container")
+                          ? Text(c["container"], "squashfs")
+                          : std::string{};
+    if (!name.empty() && !path.empty())
+      images_[name] = config_.host_root + path;
   }
 }
 
@@ -58,15 +95,22 @@ void Updater::LoadState() {
   const auto j = nlohmann::json::parse(in, nullptr, false);
   if (!j.is_object() || !j.contains("containers")) return;
   for (const auto& [name, e] : j["containers"].items()) {
+    // A broken entry (a power cut, a hand edit) is skipped, not fatal.
+    if (!e.is_object()) continue;
     Entry entry;
-    entry.version = e.value("version", std::string{});
-    for (const auto& f : e.value("failed", nlohmann::json::array())) {
-      entry.failed.insert(f.get<std::string>());
+    entry.version = Text(e, "version");
+    if (e.contains("failed") && e["failed"].is_array()) {
+      for (const auto& f : e["failed"]) {
+        if (f.is_string()) entry.failed.insert(f.get<std::string>());
+      }
     }
-    entry.pending = e.value("pending", std::string{});
-    const auto interrupted = e.value("interrupted", nlohmann::json::object());
-    for (const auto& [v, n] : interrupted.items()) {
-      if (n.is_number_integer()) entry.interrupted[v] = n.get<int>();
+    entry.pending = Text(e, "pending");
+    if (e.contains("interrupted") && e["interrupted"].is_object()) {
+      for (const auto& [v, n] : e["interrupted"].items()) {
+        if (n.is_number_integer())
+          entry.interrupted[v] =
+              Number(e["interrupted"], v.c_str(), 0, 0, 1000);
+      }
     }
     entries_[name] = entry;
   }

@@ -35,6 +35,20 @@ struct Fd {
   }
 };
 
+/// @p j[@p key] is true (and a boolean).
+bool IsTrue(const nlohmann::json& j, const char* key) {
+  return j.is_object() && j.contains(key) && j[key].is_boolean() &&
+         j[key].get<bool>();
+}
+
+/// @p j[@p key] if it is a string, else @p fallback.
+std::string Text(const nlohmann::json& j, const char* key,
+                 std::string fallback = {}) {
+  if (!j.is_object() || !j.contains(key) || !j[key].is_string())
+    return fallback;
+  return j[key].get<std::string>();
+}
+
 /// A call's HTTP status as success (200) or an error.
 std::expected<void, std::string> Ok(const std::expected<int, std::string>& r) {
   if (!r) return std::unexpected(r.error());
@@ -71,12 +85,14 @@ std::expected<int, std::string> AuthSocketFleet::Call(
       head.append(chunk.substr(0, nl));
       if (nl == std::string_view::npos) continue;
       const auto h = nlohmann::json::parse(head, nullptr, false);
-      if (!h.is_object() || !h.value("ok", false)) {
+      if (!IsTrue(h, "ok")) {
         return std::unexpected(
             "aember-auth: " +
-            (h.is_object() ? h.value("error", std::string{"failed"}) : head));
+            (h.is_object() ? Text(h, "error", "failed") : head));
       }
-      status = h.value("status", 0);
+      status = h.contains("status") && h["status"].is_number_integer()
+                   ? h["status"].get<int>()
+                   : 0;
       in_body = true;
       chunk.remove_prefix(nl + 1);
     }
@@ -135,9 +151,8 @@ std::expected<nlohmann::json, std::string> ControlSocket::Ask(
   auto j = nlohmann::json::parse(
       std::string_view{buf.data(), static_cast<size_t>(n)}, nullptr, false);
   if (!j.is_object()) return std::unexpected("containerd: bad answer");
-  if (!j.value("ok", false)) {
-    return std::unexpected("containerd: " +
-                           j.value("error", std::string{"failed"}));
+  if (!IsTrue(j, "ok")) {
+    return std::unexpected("containerd: " + Text(j, "error", "failed"));
   }
   return j;
 }
@@ -146,9 +161,10 @@ std::expected<std::string, std::string> ControlSocket::State(
     const std::string& name) {
   auto j = Ask({{"op", "list"}});
   if (!j) return std::unexpected(j.error());
-  for (const auto& c : (*j)["containers"]) {
-    if (c.value("name", std::string{}) == name)
-      return c.value("state", std::string{});
+  if (j->contains("containers") && (*j)["containers"].is_array()) {
+    for (const auto& c : (*j)["containers"]) {
+      if (Text(c, "name") == name) return Text(c, "state");
+    }
   }
   return std::unexpected("containerd: no container " + name);
 }

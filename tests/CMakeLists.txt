@@ -1,4 +1,4 @@
-foreach(name manifest updater)
+foreach(name manifest updater clients)
   add_executable(${name}-unittest test_${name}.cpp)
   target_link_libraries(${name}-unittest PRIVATE aember-fleet-agent-lib)
   add_test(NAME ${name} COMMAND ${name}-unittest)

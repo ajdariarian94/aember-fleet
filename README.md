@@ -106,7 +106,7 @@ step, the assignment changing at any time; `spec/tla/README.md`).
 The agent's inputs (both sockets, the desired state, manifests, fleet.json,
 containers.json, its state file) have libFuzzer targets in `fuzz/`. On
 Ubuntu 24.04, with `clang-18 llvm-18 libclang-rt-18-dev cmake ninja-build
-pkg-config libwolfssl-dev nlohmann-json3-dev` installed: `fuzz/run.sh` (every
+pkg-config libmbedtls-dev nlohmann-json3-dev` installed: `fuzz/run.sh` (every
 target for 60 s, as CI does); crashing inputs land in
 `build/fuzz/crashes/<target>/`.
 

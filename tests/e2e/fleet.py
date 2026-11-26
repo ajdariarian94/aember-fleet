@@ -28,7 +28,6 @@ import shutil
 import socket
 import subprocess
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from aember.steps.testing.system.scenarios import System, scenario, wait_all_running
@@ -209,10 +208,14 @@ def device_image(system: System, server: FleetServer, label: str) -> Path:
     return system.image_with_containers(bundles, files, label)
 
 
-@dataclass
 class EchoVersion:
-    package: Path  # the release: <work>/<version>/aember-echo.aember
-    image: Path  # the SquashFS in it (what the device installs)
+    """A release of aember-echo. (A plain class: this file is loaded by
+    `aember systemtest --scenarios` without being a module in sys.modules,
+    where @dataclass can't resolve its annotations.)"""
+
+    def __init__(self, package: Path, image: Path) -> None:
+        self.package = package  # the release: <work>/<version>/aember-echo.aember
+        self.image = image  # the SquashFS in it (what the device installs)
 
 
 def echo_versions(system: System, versions: dict[str, str]) -> dict[str, EchoVersion]:

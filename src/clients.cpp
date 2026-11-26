@@ -184,4 +184,14 @@ std::expected<void, std::string> ControlSocket::Start(const std::string& name) {
   return Do("start", name);
 }
 
+std::expected<void, std::string> ControlSocket::Install(
+    const std::string& name) {
+  return Do("install", name);
+}
+
+std::expected<void, std::string> ControlSocket::Rollback(
+    const std::string& name) {
+  return Do("rollback", name);
+}
+
 }  // namespace aember::fleet

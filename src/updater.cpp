@@ -75,20 +75,30 @@ Updater::Updater(AgentConfig config, FleetApi& fleet, ContainerControl& control,
   LoadState();
 }
 
-void Updater::LoadImages() {
-  images_.clear();
+void Updater::LoadContainers() {
+  containers_.clear();
   std::ifstream in{config_.containers_json};
   const auto j = nlohmann::json::parse(in, nullptr, false);
-  if (!j.is_object() || !j.contains("containers")) return;
+  if (!j.is_object() || !j.contains("containers") ||
+      !j["containers"].is_array()) {
+    return;
+  }
   for (const auto& c : j["containers"]) {
     // Entries that aren't what aember writes are skipped, not fatal.
     const auto name = Text(c, "name");
-    const auto path = c.is_object() && c.contains("container")
-                          ? Text(c["container"], "squashfs")
-                          : std::string{};
-    if (!name.empty() && !path.empty())
-      images_[name] = config_.host_root + path;
+    if (!name.empty() && name.find('/') == std::string::npos &&
+        name.front() != '.') {
+      containers_.insert(name);
+    }
   }
+}
+
+std::string Updater::InstalledDir(const std::string& name) const {
+  return config_.host_root + "/var/lib/aember/" + name;
+}
+
+std::string Updater::InboxPackage(const std::string& name) const {
+  return config_.host_root + "/var/lib/aember/packages/" + name + ".aember";
 }
 
 void Updater::LoadState() {
@@ -157,17 +167,8 @@ void Updater::SaveState() const {
 }
 
 void Updater::Recover() {
-  // A power loss between the two renames of an older agent left no image,
-  // only .prev: put it back.
-  for (const auto& [name, image] : images_) {
-    std::error_code ec;
-    if (!fs::exists(image, ec) && fs::exists(image + ".prev", ec)) {
-      std::cerr << "aember-fleet-agent: " << name
-                << ": image missing, restoring " << image << ".prev\n";
-      DurableRename(image + ".prev", image, ec);
-      std::ignore = control_.Start(name);
-    }
-  }
+  // (A swap cut off by a power loss is containerd's to repair: it recovers
+  // its package directories at its start.)
   // An update cut short (power loss, agent stopped): its image never proved
   // itself. Counted first (and saved), so a recovery cut short counts too.
   for (auto& [name, e] : entries_) {
@@ -178,11 +179,13 @@ void Updater::Recover() {
     SaveState();
     std::cerr << "aember-fleet-agent: " << name << " " << version
               << ": update was interrupted (" << n << "), rolling back\n";
-    if (const auto image = images_.find(name); image != images_.end()) {
-      std::error_code ec;
-      if (fs::exists(image->second + ".prev", ec)) {
-        RollBack(name, image->second);
-      }
+    std::error_code ec;
+    // The package may still wait in the inbox (cut off before the
+    // install): it must not be installed by containerd's next start.
+    fs::remove(InboxPackage(name), ec);
+    if (containers_.contains(name) &&
+        fs::exists(InstalledDir(name) + ".prev", ec)) {
+      RollBack(name);
     }
     e.pending.clear();
     SaveState();
@@ -202,7 +205,7 @@ nlohmann::json Updater::Status() const {
 }
 
 int Updater::RunOnce() {
-  LoadImages();
+  LoadContainers();
   if (!recovered_) {
     Recover();
     recovered_ = true;
@@ -242,8 +245,7 @@ void Updater::Update(const DesiredContainer& want) {
          "off)");
     return;
   }
-  const auto image = images_.find(want.name);
-  if (image == images_.end()) {
+  if (!containers_.contains(want.name)) {
     fail("error", "no such container on this device");
     return;
   }
@@ -262,7 +264,7 @@ void Updater::Update(const DesiredContainer& want) {
   std::cerr << "aember-fleet-agent: " << want.name << ": "
             << (e.version.empty() ? "image" : e.version) << " -> "
             << want.version << '\n';
-  if (auto r = Install(want, *m, image->second, e); !r) {
+  if (auto r = Install(want, *m, e); !r) {
     fail("error", r.error());
     return;
   }
@@ -277,7 +279,7 @@ void Updater::Update(const DesiredContainer& want) {
     case Health::kUnhealthy:
       std::cerr << "aember-fleet-agent: " << want.name << " " << want.version
                 << " didn't stay up: rolling back\n";
-      RollBack(want.name, image->second);
+      RollBack(want.name);
       e.failed.insert(want.version);
       e.pending.clear();
       e.state = "rolled-back";
@@ -291,21 +293,22 @@ void Updater::Update(const DesiredContainer& want) {
   SaveState();
 }
 
-void Updater::RollBack(const std::string& name, const std::string& image) {
-  std::ignore = control_.Stop(name);
-  std::error_code ec;
-  DurableRename(image + ".prev", image, ec);
-  std::ignore = control_.Start(name);
+void Updater::RollBack(const std::string& name) {
+  if (auto r = control_.Rollback(name); !r) {
+    std::cerr << "aember-fleet-agent: " << name << ": rollback: " << r.error()
+              << '\n';
+  }
 }
 
 std::expected<void, std::string> Updater::Install(const DesiredContainer& want,
-                                                  const Manifest& m,
-                                                  const std::string& image,
-                                                  Entry& e) {
-  const std::string next = image + ".new";
+                                                  const Manifest& m, Entry& e) {
+  const std::string package = InboxPackage(want.name);
+  const std::string part = package + ".part";
+  std::error_code ec;
+  fs::create_directories(fs::path{package}.parent_path(), ec);
   {
-    std::ofstream out{next, std::ios::binary | std::ios::trunc};
-    if (!out) return std::unexpected("cannot write " + next);
+    std::ofstream out{part, std::ios::binary | std::ios::trunc};
+    if (!out) return std::unexpected("cannot write " + part);
     Sha256Hasher sha;
     std::uint64_t got = 0;
     auto r = fleet_.Download(want.artifact, [&](std::string_view chunk) {
@@ -317,50 +320,35 @@ std::expected<void, std::string> Updater::Install(const DesiredContainer& want,
     });
     out.close();
     if (!r || got != m.size || sha.HexDigest() != m.sha256) {
-      fs::remove(next);
+      fs::remove(part, ec);
       return std::unexpected(
           !r ? "download: " + r.error()
              : std::string{"download doesn't match the manifest"});
     }
   }
-  // The new image's bytes on disk before it replaces the old one: after a
-  // power loss the image must never be a half-written file.
-  if (FILE* f = std::fopen(next.c_str(), "r+")) {
+  // The package's bytes on disk, then its name: containerd never finds a
+  // half-written package in its inbox.
+  if (FILE* f = std::fopen(part.c_str(), "r+")) {
     ::fsync(::fileno(f));
     std::fclose(f);
   }
-  // .prev: a hard link to the current image (a copy where links don't
-  // work), put in place with one rename. The image itself stays.
-  std::error_code ec;
-  const std::string prev = image + ".prev";
-  const std::string prev_tmp = prev + ".tmp";
-  fs::remove(prev_tmp, ec);
-  fs::create_hard_link(image, prev_tmp, ec);
-  if (ec) fs::copy_file(image, prev_tmp, ec);
-  if (!ec) DurableRename(prev_tmp, prev, ec);
+  DurableRename(part, package, ec);
   if (ec) {
-    fs::remove(prev_tmp, ec);
-    fs::remove(next, ec);
-    return std::unexpected("cannot keep the previous image");
+    fs::remove(part, ec);
+    return std::unexpected("cannot put the package into the inbox");
   }
   // From here on a power loss leaves a pending update for Recover().
   e.pending = want.version;
   SaveState();
-  if (auto r = control_.Stop(want.name); !r) {
-    fs::remove(next, ec);
+  // containerd stops the container, checks the package (its own signature
+  // too), keeps the installed version as <name>.prev, starts the new one.
+  // A failed install leaves the old version running.
+  if (auto r = control_.Install(want.name); !r) {
+    fs::remove(package, ec);
     e.pending.clear();
     SaveState();
-    return std::unexpected("stop: " + r.error());
+    return std::unexpected("install: " + r.error());
   }
-  DurableRename(next, image, ec);  // atomic: the old image or the new one
-  if (ec) {
-    fs::remove(next, ec);
-    std::ignore = control_.Start(want.name);
-    e.pending.clear();
-    SaveState();
-    return std::unexpected("cannot put the new image in place");
-  }
-  std::ignore = control_.Start(want.name);  // a failed start: Check says no
   return {};
 }
 

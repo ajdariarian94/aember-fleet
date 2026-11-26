@@ -199,12 +199,16 @@ int main() {
       } catch (const PowerLoss&) { cut = true; }
       std::cerr.rdbuf(cerr);
       w.control.on_call = nullptr;
-      if (cut) {  // the device boots again: containerd starts the image
+      if (cut) {  // the device boots again: containerd installs what waits
+                  // in its inbox, then starts the container
+        if (fs::exists(w.inbox + "/echo.aember")) {
+          std::ignore = w.control.Install("echo");
+        }
         std::ignore = w.control.Start("echo");
         w.control.calls.clear();
       }
       CHECK(fs::exists(w.image));
-      CHECK(good(w.image) || good(w.image + ".prev"));
+      CHECK(good(w.image) || good(w.prev));
       if (mode > 1 || cut || w.fleet.reports.empty()) continue;
 
       const auto echo = w.Echo();

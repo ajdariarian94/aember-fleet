@@ -18,19 +18,20 @@ its start/restart/shutdown model (aember `spec/tla/`).
 
 ## The model
 
-Disk: the image containerd starts, `<image>.prev`, `<image>.new` and the
-agent's state file. A power loss keeps the disk and loses the agent's
+Disk: the installed version containerd starts, `<name>.prev`, the
+downloaded package (`.new` in the model: the package in containerd's
+inbox) and the agent's state file. A power loss keeps the disk and loses the agent's
 memory; the next agent starts from its state file.
 
 | Step | Code |
 |------|------|
 | `Recover`, `Restore`: a pending update is counted as interrupted (saved), then rolled back to `.prev` | `Updater::Recover` |
 | `Poll`: nothing to do, a failed version, or update | `RunOnce`, `Update` |
-| `Download`: `.new`, size and SHA-256 checked | `Install` |
-| `LinkPrev`: `.prev` = hard link of the image (via `.prev.tmp` + rename) | `Install` |
+| `Download`: the package into the inbox (`.part`, size and SHA-256 checked, synced, renamed) | `Install` |
 | `SavePending`: the version being installed goes into the state file | `Install` |
-| `Stop`, `Swap2` (`rename(.new, image)`, atomic), `Health` | `Install`, `Check` |
-| `Rollback`: `rename(.prev, image)`, version marked failed | `RollBack` |
+| `LinkPrev`, `Stop`, `Swap2`: aember-containerd's `install` (stop; unpack into `.<name>.new`, then `renameat2(RENAME_EXCHANGE)` with `<name>`, the old one becoming `<name>.prev`: `LinkPrev` and `Swap2` in one atomic step, which the model's two steps over-approximate) | `Install` → aember `utils/package` `Install` |
+| `Health` | `Check` |
+| `Rollback`: containerd's `rollback` (swap `<name>` and `<name>.prev`), version marked failed | `RollBack` → aember `utils/package` `Rollback` |
 | `Save` | `SaveState` |
 | `PowerLoss`, `Assign(v)`: the environment, bounded | |
 
@@ -80,8 +81,10 @@ with one rename, so the image never goes away; the update is saved as
 `pending` (file and directory fsync'd) before the container is stopped; `.new` replaces the image
 with one rename; a health check cut short by SIGTERM decides nothing;
 a restarted agent rolls a pending update back first, and a version
-interrupted `kMaxInterrupts` (2) times counts as failed. It also restores an
-image left only as `.prev` by the older agent.
+interrupted `kMaxInterrupts` (2) times counts as failed. Since `.aember`
+packages, the swap itself is aember-containerd's (one `RENAME_EXCHANGE`,
+repaired by its `Recover` at start), and the agent no longer touches the
+installed files.
 
 ## Where the code differs
 

@@ -4,15 +4,18 @@
  *        fleet server assigns, one container at a time, and roll back what
  *        doesn't stay up.
  *
- * For each assigned container whose version differs from the one on the
- * device: check the release signature and the manifest, download the image
- * next to the current one (<image>.new, size and SHA-256 checked), keep the
- * current image as <image>.prev (a hard link: the image itself never goes
- * away), save the update as pending, stop the container, put the new image
- * in place (one rename), start it, and watch it for health_seconds. A
- * container that isn't running at any moment of that window is rolled back
- * to <image>.prev and the version is marked failed (not tried again until
- * the server assigns another one). Every round ends with a status report.
+ * A release is a container's .aember package (aember's
+ * doc/aember-format.md). For each assigned container whose version differs
+ * from the one on the device: check the release signature and the
+ * manifest, download the package into aember-containerd's inbox
+ * (/var/lib/aember/packages/<name>.aember; size and SHA-256 checked, synced,
+ * then renamed into place), save the update as pending, and ask
+ * containerd to install it ("install": stop, check the package's own
+ * signature, unpack with the old version kept as <name>.prev, start). Then
+ * watch it for health_seconds. A container that isn't running at any
+ * moment of that window is rolled back ("rollback": back to <name>.prev)
+ * and the version is marked failed (not tried again until the server
+ * assigns another one). Every round ends with a status report.
  *
  * Power loss (or the agent stopped) at any step: the next agent finds the
  * pending update in its state file and rolls it back before anything else
@@ -73,13 +76,18 @@ class ContainerControl {
       const std::string& name) = 0;
   virtual std::expected<void, std::string> Stop(const std::string& name) = 0;
   virtual std::expected<void, std::string> Start(const std::string& name) = 0;
+  /// Install the package waiting in the inbox (stop, unpack, start).
+  virtual std::expected<void, std::string> Install(const std::string& name) = 0;
+  /// Back to the version before the last install.
+  virtual std::expected<void, std::string> Rollback(
+      const std::string& name) = 0;
 };
 
 struct AgentConfig {
   PublicKey release_key{};
   std::string arch;
-  /// The device's containers.json (squashfs paths) and the prefix its
-  /// paths have here (the device's root is bound at /host in the agent).
+  /// The device's containers.json (which containers there are) and the
+  /// prefix its paths have here (the device's root is bound at /host).
   std::string containers_json = "/host/etc/aember/containers.json";
   std::string host_root = "/host";
   std::string state_file = "/var/lib/aember-fleet/state.json";
@@ -129,15 +137,17 @@ class Updater {
   };
   enum class Health { kHealthy, kUnhealthy, kInterrupted };
 
-  void LoadImages();
+  void LoadContainers();
   void LoadState();
   void SaveState() const;
   void Recover();
   void Update(const DesiredContainer& want);
   std::expected<void, std::string> Install(const DesiredContainer& want,
-                                           const Manifest& m,
-                                           const std::string& image, Entry& e);
-  void RollBack(const std::string& name, const std::string& image);
+                                           const Manifest& m, Entry& e);
+  void RollBack(const std::string& name);
+  /// <host_root>/var/lib/aember/<name> (installed) and the inbox.
+  [[nodiscard]] std::string InstalledDir(const std::string& name) const;
+  [[nodiscard]] std::string InboxPackage(const std::string& name) const;
   /// fs::rename, then sync_dir of the target's directory.
   void DurableRename(const std::string& from, const std::string& to,
                      std::error_code& ec) const;
@@ -147,7 +157,7 @@ class Updater {
   FleetApi& fleet_;
   ContainerControl& control_;
   Sleep sleep_;
-  std::map<std::string, std::string> images_;  ///< container -> squashfs path
+  std::set<std::string> containers_;  ///< what containers.json lists
   std::map<std::string, Entry> entries_;
   bool recovered_ = false;
 };

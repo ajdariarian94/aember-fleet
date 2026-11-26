@@ -44,6 +44,8 @@ class ControlSocket final : public ContainerControl {
       const std::string& name) override;
   std::expected<void, std::string> Stop(const std::string& name) override;
   std::expected<void, std::string> Start(const std::string& name) override;
+  std::expected<void, std::string> Install(const std::string& name) override;
+  std::expected<void, std::string> Rollback(const std::string& name) override;
 
  private:
   std::expected<nlohmann::json, std::string> Ask(const nlohmann::json& request);

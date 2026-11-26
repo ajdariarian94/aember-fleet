@@ -16,12 +16,11 @@ int main() {
     w.Assign("2", "v2 image");
     u.RunOnce();
     CHECK_EQ(Read(w.image), std::string{"v2 image"});
-    CHECK_EQ(Read(w.image + ".prev"), std::string{"v1 image"});
-    CHECK(!fs::exists(w.image + ".new"));
+    CHECK_EQ(Read(w.prev), std::string{"v1 image"});
+    CHECK(fs::is_empty(w.inbox));  // installed, nothing left waiting
     CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"updated"});
     CHECK_EQ(w.Echo()["version"].get<std::string>(), std::string{"2"});
-    CHECK(w.control.calls ==
-          (std::vector<std::string>{"stop echo", "start echo"}));
+    CHECK(w.control.calls == (std::vector<std::string>{"install echo"}));
     u.RunOnce();
     CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"current"});
     CHECK_EQ(w.fleet.downloads, 1);
@@ -40,6 +39,8 @@ int main() {
     CHECK_EQ(w.control.state["echo"], std::string{"running"});
     CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"rolled-back"});
     CHECK(w.Echo()["failed_versions"] == nlohmann::json::array({"3"}));
+    CHECK(w.control.calls ==
+          (std::vector<std::string>{"install echo", "rollback echo"}));
     u.RunOnce();
     CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"failed"});
     CHECK_EQ(w.fleet.downloads, 1);
@@ -67,7 +68,7 @@ int main() {
       u.RunOnce();
       CHECK_EQ(Read(w.image), std::string{"v1 image"});
       CHECK(w.control.calls.empty());
-      CHECK(!fs::exists(w.image + ".new"));
+      CHECK(!fs::exists(w.inbox) || fs::is_empty(w.inbox));
       if (w.Echo()["state"] != "error") std::cerr << c.what << '\n';
       CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"error"});
     }
@@ -87,16 +88,18 @@ int main() {
     }
     CHECK(found);
   }
-  {  // the image never goes away, and the update is saved before the stop
+  {  // the package is in the inbox, complete, and the update saved as
+     // pending, before containerd is asked to install it
     World w;
     Updater u{w.config, w.fleet, w.control, NoSleep};
     w.Assign("2", "v2 image");
     bool checked = false;
-    w.control.on_stop = [&] {
+    w.control.on_install = [&] {
       if (checked) return;
       checked = true;
       CHECK_EQ(Read(w.image), std::string{"v1 image"});
-      CHECK_EQ(Read(w.image + ".prev"), std::string{"v1 image"});
+      CHECK_EQ(Read(w.inbox + "/echo.aember"), std::string{"v2 image"});
+      CHECK(!fs::exists(w.inbox + "/echo.aember.part"));
       const auto state = nlohmann::json::parse(Read(w.config.state_file));
       CHECK_EQ(state["containers"]["echo"]["pending"].get<std::string>(),
                std::string{"2"});
@@ -138,25 +141,24 @@ int main() {
     CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"failed"});
     CHECK_EQ(w.fleet.downloads, kMaxInterrupts);
   }
-  {  // Regression (spec/tla/FleetUpdate.tla, ImageAlwaysThere): a power loss
-     // between the two renames of the old agent left only .prev; every later
-     // update then failed and the container never came back.
+  {  // containerd refuses the package (its own signature): the old version
+     // keeps running, the package doesn't stay in the inbox
     World w;
-    fs::rename(w.image, w.image + ".prev");
-    w.control.state["echo"] = "failed";
     Updater u{w.config, w.fleet, w.control, NoSleep};
+    w.Assign("2", "v2 image");
+    w.control.on_install = [&] { fs::remove(w.inbox + "/echo.aember"); };
     u.RunOnce();
     CHECK_EQ(Read(w.image), std::string{"v1 image"});
-    CHECK_EQ(w.control.state["echo"], std::string{"running"});
+    CHECK_EQ(w.Echo()["state"].get<std::string>(), std::string{"error"});
+    CHECK(w.Echo()["error"].get<std::string>().starts_with("install:"));
   }
   {  // Regression: a broken entry in containers.json or the agent's own
      // state.json (a power cut, a hand edit) threw out of RunOnce and the
      // agent crash-looped (found by fuzz_agent_files). Now it is skipped.
     World w;
     std::ofstream{w.config.containers_json}
-        << R"({"containers":[{"name":1,"container":{"squashfs":"/x"}},)"
-           R"({"name":"y","container":"z"},"text",)"
-           R"({"name":"echo","container":{"squashfs":"/var/lib/aember/echo/echo.squashfs"}}]})";
+        << R"({"containers":[{"name":1},{"name":"../x"},"text",)"
+           R"({"name":"echo"}]})";
     fs::create_directories(fs::path{w.config.state_file}.parent_path());
     std::ofstream{w.config.state_file}
         << R"({"containers":{"echo":{"version":"1","failed":[3,"4"],)"
@@ -210,9 +212,8 @@ int main() {
     std::vector<std::string> synced;
     u.sync_dir = [&](const std::string& d) { synced.push_back(d); };
     const auto state_dir = fs::path{w.config.state_file}.parent_path().string();
-    const auto image_dir = fs::path{w.image}.parent_path().string();
     bool pending_synced = false;
-    w.control.on_stop = [&] {
+    w.control.on_install = [&] {
       pending_synced =
           Read(w.config.state_file).contains(R"("pending": "2")") &&
           !synced.empty() && synced.back() == state_dir;
@@ -220,7 +221,7 @@ int main() {
     w.Assign("2", "v2 image");
     u.RunOnce();
     CHECK(pending_synced);
-    CHECK(std::ranges::count(synced, image_dir) >= 2);  // .prev, the swap
+    CHECK(std::ranges::count(synced, w.inbox) == 1);  // the package's rename
     CHECK_EQ(Read(w.image), std::string{"v2 image"});
   }
   CHECK(!ParseDesired(nlohmann::json{{"containers", {{{"name", "x"}}}}})

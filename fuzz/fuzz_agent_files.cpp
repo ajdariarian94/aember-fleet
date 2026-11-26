@@ -36,6 +36,12 @@ struct NoControl final : ContainerControl {
   std::expected<void, std::string> Stop(const std::string&) override {
     return {};
   }
+  std::expected<void, std::string> Install(const std::string&) override {
+    return {};
+  }
+  std::expected<void, std::string> Rollback(const std::string&) override {
+    return {};
+  }
   std::expected<void, std::string> Start(const std::string&) override {
     return {};
   }

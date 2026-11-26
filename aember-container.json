@@ -13,7 +13,7 @@
     "lxc.hook.pre-start = /bin/sh -c \"mkdir -p /run/aember-auth /run/aember-containerd /var/lib/aember-fleet\"",
     "lxc.mount.entry = /run/aember-auth run/aember-auth none bind,create=dir 0 0",
     "lxc.mount.entry = /run/aember-containerd run/aember-containerd none bind,create=dir 0 0",
-    "# The container images it replaces (and their .prev), and containers.json for their paths",
+    "# The packages it delivers (into /var/lib/aember/packages/, containerd installs them), and containers.json for which containers there are",
     "lxc.mount.entry = /var/lib/aember host/var/lib/aember none bind,create=dir 0 0",
     "lxc.mount.entry = /etc/aember host/etc/aember none bind,ro,create=dir 0 0",
     "# fleet.json (release public key, arch): /etc/aember/fleet on the device; its state: /var/lib/aember-fleet",

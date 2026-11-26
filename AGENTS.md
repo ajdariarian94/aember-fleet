@@ -37,9 +37,15 @@ Container updates for aember fleets (README.md). Two parts:
 `spec/tla/FleetUpdate.tla` is the update's design (power loss at any step,
 assignment changes). When the updater's steps change, change the model,
 run `spec/tla/check.sh` (Docker, seconds) and keep its README's "Where the
-code differs" current. Invariants to keep: the image is never missing (no
-rename of the image away), the update is saved as pending before the
-container is stopped, a pending update is rolled back at start.
+code differs" current. Invariants to keep: the installed version is never
+missing (the agent never touches /var/lib/aember/<name>/: aember-containerd
+installs and rolls back, `install` / `rollback` on its control socket), the
+package is complete in the inbox before it is renamed there, the update is
+saved as pending before the install, a pending update is rolled back at
+start. A release is a container's `.aember` package (aember's
+doc/aember-format.md); it carries two signatures, the fleet's release
+signature (manifest, checked by the agent) and the package's own (checked
+by containerd against the board's /etc/aember/keys).
 
 ## Rules
 

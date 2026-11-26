@@ -55,21 +55,27 @@ struct FakeFleet final : FleetApi {
   }
 };
 
-/// containerd stand-in: a started container whose image begins with
-/// "crash" fails. on_call runs first in every call (a test throws from it to
+/// containerd stand-in on the device directory: "install" moves the
+/// package waiting in the inbox into place (the installed version to
+/// <name>.prev, in one step like containerd's RENAME_EXCHANGE), "rollback"
+/// swaps them back; a container whose image begins with "crash" fails when
+/// it starts. on_call runs first in every call (a test throws from it to
 /// cut the agent off there, e.g. a power loss).
 struct FakeControl final : ContainerControl {
-  std::map<std::string, std::string> image_of, state;
+  std::string lib;  ///< <host>/var/lib/aember
+  std::map<std::string, std::string> state;
   std::vector<std::string> calls;
   std::function<void(std::string_view op)> on_call;
+  std::function<void()> on_install;
+  std::string Image(const std::string& n) const {
+    return lib + "/" + n + "/image.squashfs";
+  }
   std::expected<std::string, std::string> State(const std::string& n) override {
     if (on_call) on_call("state");
     return state[n];
   }
-  std::function<void()> on_stop;
   std::expected<void, std::string> Stop(const std::string& n) override {
     if (on_call) on_call("stop");
-    if (on_stop) on_stop();
     calls.push_back("stop " + n);
     state[n] = "stopped";
     return {};
@@ -77,7 +83,38 @@ struct FakeControl final : ContainerControl {
   std::expected<void, std::string> Start(const std::string& n) override {
     if (on_call) on_call("start");
     calls.push_back("start " + n);
-    state[n] = Read(image_of[n]).starts_with("crash") ? "failed" : "running";
+    state[n] = Read(Image(n)).starts_with("crash") ? "failed" : "running";
+    return {};
+  }
+  void Swap(const std::string& n) {
+    const auto dir = lib + "/" + n;
+    fs::rename(dir, dir + ".swap");
+    if (fs::exists(dir + ".prev")) fs::rename(dir + ".prev", dir);
+    fs::rename(dir + ".swap", dir + ".prev");
+  }
+  std::expected<void, std::string> Install(const std::string& n) override {
+    if (on_call) on_call("install");
+    if (on_install) on_install();
+    calls.push_back("install " + n);
+    const auto package = lib + "/packages/" + n + ".aember";
+    if (!fs::exists(package)) return std::unexpected("nothing to install");
+    const auto next = lib + "/." + n + ".new";
+    fs::create_directories(next);
+    fs::rename(package, next + "/image.squashfs");
+    fs::remove_all(lib + "/" + n + ".prev");
+    fs::rename(lib + "/" + n, lib + "/" + n + ".prev");
+    fs::rename(next, lib + "/" + n);
+    state[n] = Read(Image(n)).starts_with("crash") ? "failed" : "running";
+    return {};
+  }
+  std::expected<void, std::string> Rollback(const std::string& n) override {
+    if (on_call) on_call("rollback");
+    calls.push_back("rollback " + n);
+    if (!fs::exists(lib + "/" + n + ".prev")) {
+      return std::unexpected("no previous version");
+    }
+    Swap(n);
+    state[n] = Read(Image(n)).starts_with("crash") ? "failed" : "running";
     return {};
   }
 };
@@ -88,7 +125,9 @@ struct World {
   FakeFleet fleet;
   FakeControl control;
   AgentConfig config;
-  std::string image;
+  std::string image;  ///< the installed version's image
+  std::string prev;   ///< the one before
+  std::string inbox;  ///< where packages wait for containerd
 
   World() {
     char d[] = "/tmp/aember-fleet-agent-XXXXXX";
@@ -96,10 +135,12 @@ struct World {
     fs::create_directories(dir + "/host/etc/aember");
     fs::create_directories(dir + "/host/var/lib/aember/echo");
     std::ofstream{dir + "/host/etc/aember/containers.json"}
-        << R"({"containers":[{"name":"echo","container":{"squashfs":"/var/lib/aember/echo/echo.squashfs"}}]})";
-    image = dir + "/host/var/lib/aember/echo/echo.squashfs";
+        << R"({"containers":[{"name":"echo"}]})";
+    control.lib = dir + "/host/var/lib/aember";
+    image = control.Image("echo");
+    prev = control.lib + "/echo.prev/image.squashfs";
+    inbox = control.lib + "/packages";
     std::ofstream{image} << "v1 image";
-    control.image_of["echo"] = image;
     control.state["echo"] = "running";
     config.release_key = key.pub;
     config.arch = kArch;

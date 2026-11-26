@@ -21,21 +21,27 @@ device:  aember-auth ◄── socket ── aember-fleet-agent ── control s
 
 ## How an update goes
 
-1. The admin uploads a container image with a **release signature**
+1. The admin uploads a container's **`.aember` package** (aember's
+   [package format](https://github.com/ajdariarian94/aember/blob/main/doc/aember-format.md),
+   what `aember-cli/run.py pack` builds) with a **release signature**
    (Ed25519 over a manifest: container, version, aember target, size,
    SHA-256). The private release key stays with the admin; the server only
    checks it, the devices check it again.
 2. The admin assigns a version to a group (`lab`) or a device.
 3. The agent polls (`GET /api/v1/device/desired`), checks the signature,
-   downloads the image next to the current one and checks size and SHA-256.
-4. It keeps the current image as `<image>.prev` (a hard link), saves the
-   update as pending, stops the container through aember-containerd's
-   control socket, puts the new image in place with one rename and starts
-   it. The image is never missing, and a power loss at any step is rolled
-   back by the next agent (an update interrupted twice counts as failed).
+   downloads the package into aember-containerd's inbox
+   (`/var/lib/aember/packages/<name>.aember`, renamed into place only once
+   complete) and checks size and SHA-256.
+4. It saves the update as pending and asks aember-containerd to install it
+   (control socket, `install`): containerd stops the container, checks the
+   package's own signature against the board's keys, unpacks it with the
+   installed version kept as `<name>.prev` (one atomic swap), and starts
+   it. The installed version is never missing, and a power loss at any step
+   is rolled back by the next agent (an update interrupted twice counts as
+   failed).
 5. If the container isn't running at any moment of the health window
-   (20 s), the agent restores `.prev`, starts it again, and marks that
-   version failed (not tried again until another is assigned).
+   (20 s), the agent asks for a `rollback` (back to `<name>.prev`) and marks
+   that version failed (not tried again until another is assigned).
 6. Every round ends with a status report the admin sees in `devices`.
 
 ## Server
@@ -56,7 +62,7 @@ Admin commands (`--data` gives the admin token and the CA,
 
 ```bash
 aember-fleet join-token --group lab --uses 10
-aember-fleet upload aember-echo.squashfs --container aember-echo --version 2 \
+aember-fleet upload aember-echo.aember --container aember-echo --version 2 \
     --arch x64-poky-linux --release-key release.key
 aember-fleet assign aember-echo 2 --group lab      # or --device <id>
 aember-fleet devices                               # what they run, how it went

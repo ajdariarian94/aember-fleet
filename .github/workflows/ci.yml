@@ -54,23 +54,19 @@ jobs:
         run: spec/tla/check.sh
 
   host:
-    # The mbedTLS backend (what the SDK switches to; see aember's
-    # doc/licensing/) and the wolfSSL one, with Ubuntu's libraries.
-    name: Agent unit tests (host, ${{ matrix.crypto }})
+    # The same code with Ubuntu's mbedTLS 2.28 (the SDK has 3.6).
+    name: Agent unit tests (host, mbedTLS)
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        crypto: [mbedtls, wolfssl]
     steps:
       - uses: actions/checkout@v4
       - name: Tools
         run: >-
           sudo apt-get update && sudo apt-get install -y g++-14 ninja-build
-          pkg-config libmbedtls-dev libwolfssl-dev nlohmann-json3-dev
+          pkg-config libmbedtls-dev nlohmann-json3-dev
       - name: Build
         run: >-
           CC=gcc-14 CXX=g++-14 cmake -S . -B build/host -G Ninja
-          -DBUILD_TESTS=ON -DAEMBER_FLEET_CRYPTO=${{ matrix.crypto }}
+          -DBUILD_TESTS=ON
           && cmake --build build/host
       - name: Tests
         run: ctest --test-dir build/host --output-on-failure

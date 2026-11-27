@@ -11,8 +11,8 @@ sys.path.insert(0, str(ROOT / "tools" / "aember-build-helper" / "project-cli"))
 from aember_project import Project, main  # noqa: E402
 
 NAME = "aember-fleet-agent"
-# aember-resources release with the SDKs; v0.1.15 adds wolfSSL.
-RESOURCES_VERSION = "0.1.15"
+# aember-resources release with the SDKs; v0.1.16: mbedTLS instead of wolfSSL.
+RESOURCES_VERSION = "0.1.16"
 TESTS = "sdk"  # built with the x64 SDK, run through its loader: needs its libraries
 
 if __name__ == "__main__":

@@ -19,7 +19,6 @@ add_compile_options(-g -O1 -Wall -Wextra ${SANITIZE} -fsanitize=fuzzer-no-link)
 add_link_options(${SANITIZE})
 
 # mbedTLS by default (Ubuntu's libmbedtls-dev): the backend we ship next.
-set(AEMBER_FLEET_CRYPTO "mbedtls" CACHE STRING "SHA-256 backend: mbedtls or wolfssl")
 include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/backends.cmake)
 find_package(nlohmann_json 3 REQUIRED)
 

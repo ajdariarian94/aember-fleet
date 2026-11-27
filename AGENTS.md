@@ -15,7 +15,7 @@ Container updates for aember fleets (README.md). Two parts:
 - the repository root: the device agent, C++23, built like aember-stats
   with the shared CLI (`aember-cli/run.py` → aember-build-helper's
   `project-cli/`; `TESTS = "sdk"`, `RESOURCES_VERSION =
-  "0.1.15"`: wolfSSL and nlohmann/json in the SDK). `updater.h` is the logic
+  "0.1.16"`: mbedTLS and nlohmann/json in the SDK). `updater.h` is the logic
   behind two interfaces (`FleetApi`, `ContainerControl`); `clients.h` has
   the real ones (aember-auth's socket, aember-containerd's control socket);
   the tests use fakes. `fuzz/`: libFuzzer targets for the agent.
@@ -55,14 +55,12 @@ by containerd against the board's /etc/aember/keys).
   `containers.json`.
 - Licensing: the agent ships under the Aember License, so it must not link
   GPL code. Ed25519 is Monocypher's (`third_party/monocypher`, vendored
-  4.0.2, BSD-2-Clause). SHA-256 has two backends, `-DAEMBER_FLEET_CRYPTO`:
+  4.0.2, BSD-2-Clause). SHA-256 is mbedTLS's,
   `src/sha256-mbedtls.cpp` (Apache-2.0; builds against mbedTLS 2.28 and
-  3.6) and `src/sha256-wolfssl.cpp` (GPL-2.0-only), the SDK default only
-  until the aember-resources SDK carries mbedTLS; then the default flips
-  and the wolfSSL file goes (aember's `doc/licensing/`). `cmake/backends.cmake`
-  sets both up for the SDK and fuzz builds; CI's `host` job tests both.
-  wolfSSL: `<wolfssl/options.h>` first; its compat macros rename words like
-  `Sha256` (hence `Sha256Hasher`).
+  3.6): the wolfSSL one (GPL-2.0-only) was removed with
+  aember-resources v0.1.16, whose SDK has mbedTLS instead (aember's
+  `doc/licensing/`). `cmake/backends.cmake` sets it up for the SDK and fuzz
+  builds; CI's `host` job tests it with Ubuntu's mbedTLS 2.28.
 - A test that pins down a fixed bug starts with a comment
   `Regression: <the bug>` (`grep -rn "Regression:"` lists them). Every bug
   fix gets one.

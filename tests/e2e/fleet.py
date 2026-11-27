@@ -43,9 +43,10 @@ HOST_FROM_QEMU = "10.0.2.2"
 POLL_INTERVAL = 5  # s; the server tells the agents
 HEALTH_SECONDS = 10  # how long a new version must stay up
 
-ECHO = "aember-echo"
-ECHO_IMAGE = f"/var/lib/aember/{ECHO}/image.squashfs"  # installed package
-ECHO_SCRIPT = "echo-alpine.sh"  # what aember-echo's config.json runs
+# The container the fleet updates: aember-stats, in every aember image.
+APP = "aember-stats"
+APP_IMAGE = f"/var/lib/aember/{APP}/image.squashfs"  # installed package
+VERSION_FILE = "fleet-e2e-version"  # marks a test release in its rootfs
 AGENT_LOG = "/var/log/aember-container-aember-fleet-agent.log"
 AGENT_STATE = "/var/lib/aember-fleet/state.json"
 AUTH_DEVICE = "/var/lib/aember-auth/device.json"
@@ -208,26 +209,26 @@ def device_image(system: System, server: FleetServer, label: str) -> Path:
     return system.image_with_containers(bundles, files, label)
 
 
-class EchoVersion:
-    """A release of aember-echo. (A plain class: this file is loaded by
+class AppVersion:
+    """A test release of aember-stats. (A plain class: this file is loaded by
     `aember systemtest --scenarios` without being a module in sys.modules,
     where @dataclass can't resolve its annotations.)"""
 
     def __init__(self, package: Path, image: Path) -> None:
-        self.package = package  # the release: <work>/<version>/aember-echo.aember
+        self.package = package  # the release: <work>/<version>/aember-stats.aember
         self.image = image  # the SquashFS in it (what the device installs)
 
 
-def echo_versions(system: System, versions: dict[str, str]) -> dict[str, EchoVersion]:
-    """aember-echo packages derived from the installed one, each with its
-    own echo-alpine.sh (version -> script); config.json and
-    lxc.container.conf stay (it still runs `/bin/sh /echo-alpine.sh`).
-    Unsigned: aember's boards allow that."""
-    work = system.log_dir / f"{system.name}-echo"
+def app_versions(system: System, versions: dict[str, bool]) -> dict[str, AppVersion]:
+    """aember-stats packages derived from the installed one (version -> runs
+    or not): each rootfs gets /fleet-e2e-version; one that doesn't run has a
+    command that doesn't exist, so it exits at once. Unsigned: aember's
+    boards allow that."""
+    work = system.log_dir / f"{system.name}-app"
     shutil.rmtree(work, ignore_errors=True)
-    original = system.image_copy_out(ECHO_IMAGE, work / "original.squashfs")
-    config = system.container_config(ECHO)
-    lxc = system.image_file(f"/var/lib/aember/{ECHO}/lxc.container.conf") or ""
+    original = system.image_copy_out(APP_IMAGE, work / "original.squashfs")
+    config = system.container_config(APP)
+    lxc = system.image_file(f"/var/lib/aember/{APP}/lxc.container.conf") or ""
     root = work / "root"
     subprocess.run(
         ["unsquashfs", "-no-xattrs", "-d", str(root), str(original)],
@@ -235,19 +236,22 @@ def echo_versions(system: System, versions: dict[str, str]) -> dict[str, EchoVer
         stdout=subprocess.DEVNULL,
     )
     out = {}
-    for version, script in versions.items():
-        (root / ECHO_SCRIPT).write_text(script)
-        image = work / f"{ECHO}-{version}.squashfs"
+    for version, runs in versions.items():
+        (root / VERSION_FILE).write_text(f"{APP} v{version}\n")
+        image = work / f"{APP}-{version}.squashfs"
         subprocess.run(
             ["mksquashfs", str(root), str(image), "-all-root", "-noappend"]
             + ["-comp", "xz", "-quiet"],
             check=True,
             stdout=subprocess.DEVNULL,
         )
-        package = work / version / f"{ECHO}.aember"
+        cfg = dict(config)
+        if not runs:
+            cfg["command"] = ["/fleet-e2e-missing-program"]
+        package = work / version / f"{APP}.aember"
         package.parent.mkdir(parents=True)
-        aember_package.write_package(package, config, lxc, image)
-        out[version] = EchoVersion(package, image)
+        aember_package.write_package(package, cfg, lxc, image)
+        out[version] = AppVersion(package, image)
     return out
 
 
@@ -255,27 +259,14 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-ECHO_GOOD = """#!/bin/sh
-# aember-echo {version} (aember-fleet end-to-end test)
-while true; do
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - echo {version}" >> /tmp/echo-output.txt
-    sleep 1
-done
-"""
-ECHO_CRASHES = """#!/bin/sh
-# aember-echo {version}: exits at once (the agent must roll it back)
-exit 1
-"""
+def device_app_sha(vm: Vm) -> str:
+    return vm.sh(f"sha256sum {APP_IMAGE}").split()[0]
 
 
-def device_echo_sha(vm: Vm) -> str:
-    return vm.sh(f"sha256sum {ECHO_IMAGE}").split()[0]
-
-
-def running_echo_version(vm: Vm) -> str:
-    """The version line of the running aember-echo's script (its rootfs is
-    the mounted image)."""
-    code, out = vm.run(f"head -2 /var/lib/aember/containers/{ECHO}/{ECHO_SCRIPT}")
+def running_app_version(vm: Vm) -> str:
+    """The version file of the running aember-stats (its rootfs is the
+    mounted image)."""
+    code, out = vm.run(f"cat /var/lib/aember/containers/{APP}/{VERSION_FILE}")
     return out if code == 0 else ""
 
 
@@ -296,10 +287,10 @@ def wait_enrolled(server: FleetServer, vm: Vm) -> dict:
 
 
 def wait_status(server: FleetServer, vm: Vm, version: str, states: set[str]) -> dict:
-    """The device reports aember-echo at @p version in one of @p states."""
+    """The device reports aember-stats at @p version in one of @p states."""
 
     def check() -> dict | None:
-        c = server.container_status(ECHO)
+        c = server.container_status(APP)
         if c.get("version") == version and c.get("state") in states:
             return c
         return None
@@ -308,7 +299,7 @@ def wait_status(server: FleetServer, vm: Vm, version: str, states: set[str]) -> 
         return vm.wait_until(
             check,
             UPDATE_TIMEOUT,
-            f"{ECHO} {version} {'/'.join(sorted(states))} on the server",
+            f"{APP} {version} {'/'.join(sorted(states))} on the server",
         )
     except AssertionError as e:
         raise AssertionError(f"{e}\n{diagnostics(server, vm)}") from None
@@ -343,14 +334,11 @@ def boot_up(system: System, vm: Vm) -> None:
 
 @scenario(
     "fleet-update",
-    "Enroll over TLS; a signed aember-echo v2 is installed; a v3 that exits "
+    "Enroll over TLS; a signed aember-stats v2 is installed; a v3 that exits "
     "at once is rolled back to v2 and marked failed",
 )
 def fleet_update(system: System) -> None:
-    images = echo_versions(
-        system,
-        {"2": ECHO_GOOD.format(version="v2"), "3": ECHO_CRASHES.format(version="v3")},
-    )
+    images = app_versions(system, {"2": True, "3": False})
     with FleetServer(system.input("server-image")) as server:
         image = device_image(system, server, system.name)
         with system.boot(rootfs=image) as vm:
@@ -362,32 +350,32 @@ def fleet_update(system: System) -> None:
                 raise vm.fail(f"enrolled as {device}")
 
             # v2: downloaded, checked, swapped in, stays up.
-            server.upload(images["2"].package, ECHO, "2")
-            server.assign(ECHO, "2")
+            server.upload(images["2"].package, APP, "2")
+            server.assign(APP, "2")
             wait_status(server, vm, "2", {"updated", "current"})
-            if device_echo_sha(vm) != sha256(images["2"].image):
-                raise vm.fail("the device's aember-echo image isn't v2")
+            if device_app_sha(vm) != sha256(images["2"].image):
+                raise vm.fail("the device's aember-stats image isn't v2")
             vm.wait_until(
-                lambda: "aember-echo v2" in running_echo_version(vm),
+                lambda: "aember-stats v2" in running_app_version(vm),
                 30,
-                "aember-echo runs v2's script",
+                "aember-stats runs v2",
             )
             vm.wait_until(
-                lambda: vm.states().get(ECHO) == "running", 60, f"{ECHO} running"
+                lambda: vm.states().get(APP) == "running", 60, f"{APP} running"
             )
 
             # v3 exits at once: rolled back to v2, never tried again.
-            server.upload(images["3"].package, ECHO, "3")
-            server.assign(ECHO, "3")
+            server.upload(images["3"].package, APP, "3")
+            server.assign(APP, "3")
             status = wait_status(server, vm, "2", {"rolled-back", "failed"})
             if "3" not in status.get("failed_versions", []):
                 raise vm.fail(f"v3 isn't marked failed: {status}")
-            if device_echo_sha(vm) != sha256(images["2"].image):
+            if device_app_sha(vm) != sha256(images["2"].image):
                 raise vm.fail("after the rollback the image isn't v2")
             vm.wait_until(
-                lambda: vm.states().get(ECHO) == "running",
+                lambda: vm.states().get(APP) == "running",
                 60,
-                f"{ECHO} running again (v2)",
+                f"{APP} running again (v2)",
             )
             log = vm.sh(f"cat {AGENT_LOG}")
             if "3 didn't stay up: rolling back" not in log:
@@ -398,12 +386,12 @@ def fleet_update(system: System) -> None:
 
 @scenario(
     "fleet-power-loss",
-    "Power is cut while a new aember-echo is on trial; after the reboot the "
+    "Power is cut while a new aember-stats is on trial; after the reboot the "
     "agent rolls back the half-done update, the image is never lost, and the "
     "update then goes through",
 )
 def fleet_power_loss(system: System) -> None:
-    images = echo_versions(system, {"2": ECHO_GOOD.format(version="v2")})
+    images = app_versions(system, {"2": True})
     with FleetServer(system.input("server-image")) as server:
         # Its own disk, booted twice: the second boot sees what the first
         # one left (no -snapshot).
@@ -412,9 +400,9 @@ def fleet_power_loss(system: System) -> None:
         with system.boot(rootfs=image, snapshot=False) as vm:
             boot_up(system, vm)
             wait_enrolled(server, vm)
-            original = device_echo_sha(vm)
-            server.upload(images["2"].package, ECHO, "2")
-            server.assign(ECHO, "2")
+            original = device_app_sha(vm)
+            server.upload(images["2"].package, APP, "2")
+            server.assign(APP, "2")
 
             # The update is pending (saved before the container stops) and
             # v2 on trial for HEALTH_SECONDS: cut the power now.
@@ -429,9 +417,9 @@ def fleet_power_loss(system: System) -> None:
             vm.wait_ready(UP_TIMEOUT)
             vm.open_shell()
             # The image is there at every moment: the old one or v2.
-            sha = device_echo_sha(vm)
+            sha = device_app_sha(vm)
             if sha not in (original, sha256(images["2"].image)):
-                raise vm.fail("aember-echo's image is neither the old one nor v2")
+                raise vm.fail("aember-stats's image is neither the old one nor v2")
             vm.wait_until(
                 lambda: "update was interrupted (1), rolling back"
                 in vm.run(f"cat {AGENT_LOG}")[1],
@@ -440,8 +428,8 @@ def fleet_power_loss(system: System) -> None:
             )
             # Interrupted once: tried again, and this time it stays.
             wait_status(server, vm, "2", {"updated", "current"})
-            if device_echo_sha(vm) != sha256(images["2"].image):
+            if device_app_sha(vm) != sha256(images["2"].image):
                 raise vm.fail("after the retry the image isn't v2")
             vm.wait_until(
-                lambda: vm.states().get(ECHO) == "running", 60, f"{ECHO} running"
+                lambda: vm.states().get(APP) == "running", 60, f"{APP} running"
             )

@@ -62,11 +62,11 @@ Admin commands (`--data` gives the admin token and the CA,
 
 ```bash
 aember-fleet join-token --group lab --uses 10
-aember-fleet upload aember-echo.aember --container aember-echo --version 2 \
+aember-fleet upload aember-stats.aember --container aember-stats --version 2 \
     --arch x64-poky-linux --release-key release.key
-aember-fleet assign aember-echo 2 --group lab      # or --device <id>
+aember-fleet assign aember-stats 2 --group lab      # or --device <id>
 aember-fleet devices                               # what they run, how it went
-aember-fleet unassign aember-echo --group lab
+aember-fleet unassign aember-stats --group lab
 ```
 
 `AEMBER_FLEET_POLL_INTERVAL` (seconds, default 60) is what agents are told.
@@ -123,7 +123,7 @@ device in QEMU with aember-auth and this agent installed, as aember system-test
 scenarios (`aember systemtest --scenarios`):
 
 - **fleet-update**: the device enrolls and logs in over TLS; a signed
-  aember-echo v2 is installed and runs; a v3 that exits at once is rolled
+  aember-stats v2 is installed and runs; a v3 that exits at once is rolled
   back to v2, marked failed and not tried again.
 - **fleet-power-loss**: QEMU is killed while v2 is on trial; after the
   reboot the image is the old one or v2 (never missing), the agent rolls
